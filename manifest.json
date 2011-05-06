@@ -1,0 +1,23 @@
+﻿{
+	"name": "東京電力 Watch",
+	"version": "0.5.1",
+	"description": "現在の電力使用状況および今後予測される使用量を表示します。データ取得には「東京電力電力供給状況API」「Yahoo! 電気予報API」および「OfficialTEPCOなどのツイート」を、グラフ表示には jqPlot 1.0.0a を利用しています。",
+	"icons": {
+		"16": "icon_on16.png",
+		"48": "icon_on48.png",
+		"128": "icon_on128.png"
+	},
+	"browser_action": {
+		"default_icon": "icon_on48.png",
+		"default_popup": "popup.html"
+	},
+	"background_page": "background.html",
+	"options_page": "options.html",
+	"permissions": [
+		"tabs",
+		"notifications",
+		"http://tepco-usage-api.appspot.com/*",
+		"http://api.twitter.com/*",
+		"http://setsuden.yahooapis.jp/*"
+	]
+}

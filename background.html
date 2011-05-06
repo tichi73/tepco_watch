@@ -1,0 +1,781 @@
+<html>
+<head>
+<meta charset="utf-8">
+<script language="javascript" type="text/javascript" src="jqplot/jquery-1.4.4.min.js"></script>
+<script language="javascript" type="text/javascript" src="common.js"></script>
+<script type="text/javascript">
+(function(){
+var tepco_usage_latest_url = 'http://tepco-usage-api.appspot.com/latest.json';
+var tepco_usage_date_url = 'http://tepco-usage-api.appspot.com/YYYYMMDD.json';
+var twitter_url = 'http://api.twitter.com/1/tichi73/lists/tepco-watch/statuses.json';
+var yahoo_forecast_url = 'http://setsuden.yahooapis.jp/v1/Setsuden/electricPowerForecast';
+var yahoo_forecast_appid ='u4Wn54Wxg67cSC8juregwvUc.VzyFj8tKzQspcxcl1b0pUstbI.CyYq75G0-';
+var mukku_url = 'http://mukku.org/v1.01/TGL/';
+
+//---------------------------------------------------------
+// Status
+//---------------------------------------------------------
+BackgroundStatus = function() {
+	var now = new Date().getTime();
+	this.define('latest_data_time'			,now - (     60*60*1000));
+	this.define('latest_tweet_time'			,now - (3*24*60*60*1000));
+	this.__name = 'background';
+	this.__autosave = true;
+}
+BackgroundStatus.prototype = new Config();
+
+//---------------------------------------------------------
+// Cache
+//---------------------------------------------------------
+function Cache() {
+	this.cache_hash = {};
+	this.cache_timeout = 0;
+}
+Cache.prototype.storeCache = function(key, data, timeout) {
+	if (key in this.cache_hash) {
+		this.cache_hash[key].data = data;
+		// console.log("update cache: " + key);
+	} else {
+		this.cache_hash[key] = { timer: null, data: data };
+		// console.log("create cache: " + key);
+	}
+	this.setClearTimer(key, timeout);
+}
+Cache.prototype.loadCache = function(key, timeout) {
+	if (key in this.cache_hash) {
+		// console.log("load cache: " + key);
+		this.setClearTimer(key, timeout);
+		return this.cache_hash[key].data;
+	}
+	return null;
+}
+Cache.prototype.clearCache = function(key) {
+	if (key in this.cache_hash) {
+		var cache = this.cache_hash[key];
+		if (cache.timer != null) {
+			clearTimeout(cache.timer);
+			cache.timer = null;
+		}
+		console.log("cleanup cache: " + key);
+		delete this.cache_hash[key];
+	}
+}
+Cache.prototype.setClearTimer = function(key, timeout) {
+	var cache = this.cache_hash[key];
+	if (cache.timer != null) {
+		clearTimeout(cache.timer);
+		cache.timer = null;
+	}
+	if (timeout == null) {
+		timeout = this.cache_timeout;
+	}
+	if (timeout > 0) {
+		var self = this;
+		cache.timeout = timeout;
+		cache.timer = setTimeout(function(){
+			console.log("cleanup cache: " + key);
+			delete self.cache_hash[key];
+		}, timeout);
+	} else {
+		cache.timeout = null;
+	}
+}
+
+//---------------------------------------------------------
+// DesktopNotifier / LatestNotifier
+//---------------------------------------------------------
+DesktopNotifier = function(title, body) {
+	this.title = title;
+	this.body = body;
+}
+DesktopNotifier.prototype.timeout = 0;
+DesktopNotifier.prototype.icon_on = 'icon_on48.png';
+DesktopNotifier.prototype.icon_off = 'icon_off48.png';
+DesktopNotifier.prototype.icon = DesktopNotifier.prototype.icon_on;
+DesktopNotifier.prototype.setDefaultIcon = function(saving) {
+	DesktopNotifier.prototype.icon = saving ? DesktopNotifier.prototype.icon_off : DesktopNotifier.prototype.icon_on;
+}
+DesktopNotifier.prototype.show = function() {
+	if (!webkitNotifications) {
+		return;
+	}
+	var notification = webkitNotifications.createNotification(this.icon, this.title, this.body);
+	notification.show();
+	if (this.timeout > 0) {
+		setTimeout(function(){ notification.cancel() }, this.timeout);
+	}
+	return notification;
+}
+
+LatestNotifier = function(data) {
+	var title, body;
+	if (data.usage_rate >= 0) {
+		title = data.usage + " 万kW 【" + data.usage_rate.toFixed(1) + "%】 使用中";
+	} else {
+		title = "電力使用率が取得できませんでした。";
+	}
+	if (data.saving) {
+		body = title;
+		title= "■■■ 計画停電実施中です！ ■■■";
+	} else {
+		var usage_updated = new Date(data.usage_updated);
+		body = usage_updated.toLocaleDateString(true) + ' ' + usage_updated.toLocaleTimeString() + ' 更新';
+	}
+	DesktopNotifier.call(this, title, body);
+}
+LatestNotifier.prototype = new DesktopNotifier();
+
+TweetNotifier = function(data) {
+	var title, body;
+	title = data.screen_name;
+	body = data.text;
+	DesktopNotifier.call(this, title, body);
+}
+TweetNotifier.prototype = new DesktopNotifier();
+
+//---------------------------------------------------------
+// Loader
+//---------------------------------------------------------
+function Loader () {
+	this.loading = false;
+	this.success = false;
+	this.data = null;
+}
+
+Loader.prototype = {
+	url: null,
+	name: 'Loader',
+	cached: false,
+	timer: null,
+	interval: 0,
+	stopTimer: function() {
+		if (this.timer != null) {
+			clearTimeout(this.timer);
+			this.timer = null;
+		}
+	},
+	setCacheData: function(data) {
+		this.data = data;
+		this.cached = true;
+	},
+	loading_check: function() {
+		if (this.loading) {
+			console.warn("loading_check: already loading!: name=", this.name);
+			return -1;
+		} else {
+			this.loading = true;
+			return 0;
+		}
+	},
+	load: function () {
+		if (this.loading_check() < 0) {
+			return;
+		}
+		this.stopTimer();
+
+		var self = this;
+		
+		// [@TODO] キャッシュの仕組みが超手抜きなので、できれば見直す
+		if (self.cached) {
+			self.success = true;
+			self.loading = false;
+			self.onsuccess(self.data);
+			self.oncomplete(null, 'OK');
+			// console.log("oncached: name=" + self.name + " : url=" + self.url);
+			return;
+		}
+		
+		var ajax = $.ajax({
+			url: this.url,
+			dataType: this.dataType,
+			dataFilter: function(data, dataType) {
+				return self.dataFilter(data, dataType);
+			},
+			beforeSend: function(XMLHttpRequest, textStatus) {
+				return self.beforeSend(XMLHttpRequest, textStatus);
+			},
+			complete: function(XMLHttpRequest, textStatus) {
+				if (self.interval > 0) {
+					self.timer = setTimeout(function(){self.load()}, self.interval);
+				}
+				return self.oncomplete(XMLHttpRequest, textStatus);
+			},
+			success: function(data, textStatus, XMLHttpRequest) {
+				self.data = data;
+				self.success = true;
+				self.loading = false;
+				return self.onsuccess(data);
+			},
+			error: function(XMLHttpRequest, textStatus, errorThrown) {
+				self.success = false;
+				self.loading = false;
+				return self.onerror(textStatus, errorThrown);
+			},
+		});
+	},
+	dataFilter: function(data, dataType) { return data; },
+	beforeSend: function(XMLHttpRequest, textStatus) {},
+	onsuccess: function(data) {
+		// console.log("onsuccess: name=" + this.name + " : data=" + data);
+	},
+	onerror: function(textStatus, errorThrown) {
+		console.error("onerror: name=" + this.name + " : status=" + textStatus + " : errorThrown=" + errorThrown);
+	},
+	oncomplete: function(XMLHttpRequest, textStatus) {
+		// console.log("oncomplete: name=" + this.name + " : status=" + textStatus);
+	},
+};
+
+//---------------------------------------------------------
+// ForecastLoader
+//---------------------------------------------------------
+function ForecastLoader (args) {
+	this.setup(args);
+};
+ForecastLoader.prototype = new Loader();
+ForecastLoader.prototype.name = 'ForecastLoader';
+ForecastLoader.prototype.setup = function(args) {
+	this.url = yahoo_forecast_url + "?appid=" + yahoo_forecast_appid + "&output=json";
+	if (args && args.date) {
+		var date = new Date(args.date);
+		// 日付を YYYYMMDD 形式にして API 引数として渡す
+		var date_val = date.getFullYear() * 10000 + (date.getMonth() + 1) * 100 + date.getDate();
+		this.url += "&date=" + date_val.toString();
+	} else {
+		this.url += "&results=169";
+	}
+}
+ForecastLoader.prototype.onsuccess = function(data) {
+	var epf = data.ElectricPowerForecasts.Forecast;
+	var forecast = {};
+	for (var i=0; i<epf.length ; i++) {
+		var f = epf[i];
+		var date_str = UsageLoader.prototype.dateToString(new Date(f.Date), 'day');
+		if (!forecast[date_str]) {
+			forecast[date_str] = [];
+		}
+		// kW -> 万kW に変換
+		forecast[date_str][parseInt(f.Hour)] = {
+			usage: f.Usage.$ / 10000,
+			capacity: f.Capacity.$ / 10000,
+		};
+	}
+	this.forecast = forecast;
+}
+
+//---------------------------------------------------------
+// UsageLoader
+//---------------------------------------------------------
+function UsageLoader (args) {
+	this.setup(args);
+};
+UsageLoader.prototype = new Loader();
+UsageLoader.prototype.name = 'UsageLoader';
+UsageLoader.prototype.setup = function(args) {
+	var type = this.type;
+	if (args) {
+		if (args.type) {
+			type = args.type;
+		}
+		if (!type && args.date) {
+			type = 'day';
+		}
+	}
+	switch (type) {
+	case 'latest':
+	default:
+		this.type = 'latest';
+		this.url = tepco_usage_latest_url;
+		break;
+	case 'month':
+	case 'day':
+		this.type = type;
+		this.date = new Date(args.date);
+		this.date_str = this.dateToString(this.date, this.type);
+		this.url = tepco_usage_date_url.replace(/YYYYMMDD/, this.date_str);
+		break;
+	}
+};
+UsageLoader.prototype.dateToString = function(date, type) {
+	var date_str = date.getFullYear() + '/' + (date.getMonth() + 1);
+	if (type == 'day') {
+		date_str += '/' + date.getDate();
+	}
+	return date_str;
+}
+UsageLoader.prototype.onsuccess = function(data) {
+	function date_localize(data) {
+		function utc2local(utc) {
+			var local = new Date(utc + ' UTC');
+			return local.toString().replace(/ GMT.*/, '');
+		};
+		if (data.usage_updated) {
+			data.usage_updated = utc2local(data.usage_updated);
+		}
+		if (data.capacity_updated) {
+			data.capacity_updated = utc2local(data.capacity_updated);
+		}
+		if (data.entryfor) {
+			data.entryfor = utc2local(data.entryfor);
+		}
+	};
+	switch (this.type) {
+	case 'latest':
+		date_localize(data);
+		data.usage_rate = (data.capacity > 0) ? (100.0 * data.usage / data.capacity) : -1;
+		break;
+	case 'month':
+	case 'day':
+		for (var i=0 ; i<data.length ; i++) {
+			date_localize(data[i]);
+		}
+		break;
+	}
+	this.data = data;
+};
+
+//---------------------------------------------------------
+// MukkuLoader （未実装）
+//---------------------------------------------------------
+// function MukkuLoader () {}
+// MukkuLoader.prototype = new Loader();
+// MukkuLoader.prototype.url = mukku_url;
+// MukkuLoader.prototype.dataType = 'xml';
+// MukkuLoader.prototype.name = 'MukkuLoader';
+// MukkuLoader.prototype.dataFilter = function(data, dataType) {
+// 	// XML 形式のデータを必要なフィールドだけパースする
+// 	var ri = $('ResultInfo',data);
+// 	var mukku = {
+// 		ResultInfo: {
+// 			Status: $('Status', ri).text(),
+// 			PowerCutTime: $('PowerCutTime', $('LastUpDate', ri)).text(),
+// 			GroupData: $('GroupData', $('LastUpDate', ri)).text(),
+// 			SystemVersion: $('SystemVersion', ri).text(),
+// 		},
+// 		Result: [],
+// 	};
+// 	$("TimeGroup",data).each(function(){
+// 		var TimeGroup = {
+// 			Group: $('Group', this).text(),
+// 			SubGroup: $('SubGroup', this).text(),
+// 			GroupID: $('GroupID', this).text(),
+// 			All: $('All', this).text(),
+// 			Count: $('Count', this).text(),
+// 			Start: $('Start', this).text().split(/,/),
+// 			End: $('End', this).text().split(/,/),
+// 			StartRfc: $('StartRfc', this).text().split(/;/),
+// 			EndRfc: $('EndRfc', this).text().split(/;/),
+// 		};
+// 		mukku.Result.push(TimeGroup);
+// 	});
+// 	return mukku;
+// };
+
+//---------------------------------------------------------
+// TwitLoader
+//---------------------------------------------------------
+function TweetLoader() {}
+TweetLoader.prototype = new Loader();
+TweetLoader.prototype.name = 'TweetLoader';
+TweetLoader.prototype.url = twitter_url;
+TweetLoader.prototype.timeline_url = function(user) {
+	if (user.match(/(.+)\/(.+)/)) {
+		var user = RegExp.$1;
+		var list = RegExp.$2;
+		return 'http://api.twitter.com/1/' + user + '/lists/' + list + '/statuses.json';
+	} else {
+		return 'http://api.twitter.com/1/statuses/user_timeline.json?screen_name=' + user;
+	}
+}
+TweetLoader.prototype.onsuccess = function(data) {
+	var tweets = [];
+	this.raw_data = this.data;
+	for (var i=0; i<data.length ;i++) {
+		var tweet = data[i];
+		var url = 'https://twitter.com/' + tweet.user.screen_name;
+		var date = new Date(tweet.created_at);
+		tweets.push({
+			id_str: tweet.id_str,
+			created_at: date,
+			time: date.getTime(),
+			text: tweet.text,
+			user_link: url,
+			tweet_link: url + '/status/' + tweet.id_str,
+			screen_name: tweet.user.screen_name,
+			image_url: tweet.user.profile_image_url,
+		});
+	}
+	this.data = tweets;
+}
+
+//---------------------------------------------------------
+// GroupLoader
+//---------------------------------------------------------
+function GroupLoader() {
+	this.group = [];
+	this.data = [];
+	this.success_count = 0;
+	this.error_count = 0;
+};
+GroupLoader.prototype = new Loader();
+GroupLoader.prototype.name = 'GroupLoader';
+GroupLoader.prototype.addLoader = function(loader) {
+	var self = this;
+	var org_onsuccess = loader.onsuccess;
+	var org_onerror = loader.onerror;
+	var org_oncomplete = loader.oncomplete;
+
+	loader.onsuccess = function(data) {
+		org_onsuccess.call(loader, data);
+		self.success_count++;
+	};
+	loader.onerror = function(textStatus, errorThrown) {
+		org_onerror.call(loader, textStatus, errorThrown);
+		self.error_count++;
+	};
+	loader.oncomplete = function(XMLHttpRequest, textStatus) {
+		org_oncomplete.call(loader, XMLHttpRequest, textStatus);
+		self.load_done();
+	};
+	this.group.push(loader);
+}
+GroupLoader.prototype.load_done = function() {
+	if (this.success_count + this.error_count == this.group.length) {
+		for (var i=0 ; i<this.group.length ; i++) {
+			this.data[i] = this.group[i].data;
+		}
+		this.success = (this.error_count == 0);
+		this.loading = false;
+		this.oncomplete();
+	}
+}
+GroupLoader.prototype.oncomplete = function() {
+	// console.log("oncomplete: success_count=" + this.success_count + " ,error_count=" + this.error_count);
+}
+GroupLoader.prototype.load = function() {
+	if (this.loading_check() < 0) {
+		return;
+	}
+	this.data = [];
+	this.success_count = 0;
+	this.error_count = 0;
+	this.loading = true;
+	for (var i=0 ; i<this.group.length ; i++) {
+		var loader = this.group[i];
+		loader.group_index = i;
+		loader.load();
+	}
+}
+
+//---------------------------------------------------------
+// TepcoWatcher
+//---------------------------------------------------------
+function TepcoWatcher() {
+	this.initConfig();
+	this.initCache();
+	this.initListener();
+	this.initLoader();
+	this.initLoader2();
+}
+
+TepcoWatcher.prototype.initConfig = function() {
+	this.config = new TepcoWatcherConfig;
+	this.status = new BackgroundStatus;
+	this.config.load();
+	this.status.load();
+}
+
+TepcoWatcher.prototype.initCache = function() {
+	var self = this;
+	this.cache = new Cache;
+	this.cache.__defineGetter__('cache_timeout', function(){ return self.config.cache_timeout });
+}
+
+TepcoWatcher.prototype.initListener = function() {
+	var self = this;
+	chrome.extension.onRequest.addListener(function(){
+		self.onRequest.apply(self, arguments);
+	});
+}
+
+TepcoWatcher.prototype.initLoader = function() {
+	var self = this;
+
+	this.latestLoader = new UsageLoader({type: 'latest'});
+	// this.latestLoader.interval = this.config.latest_update_interval;
+	this.latestLoader.__defineGetter__('interval',function(){ return self.config.latest_update_interval });
+
+	this.latestLoader.oncomplete = function() {
+		// [DEBUG] 計画停電実施中フラグや電力使用率の試験用
+		// self.latestLoader.data.saving = !self.latestLoader.data.saving;
+		// self.latestLoader.data.usage_rate = 120;
+
+		DesktopNotifier.prototype.setDefaultIcon(self.latestLoader.data.saving);
+
+		self.sendResponse('rspLatestData', self.latestLoader);
+		self.updateBadge();
+		if (self.latestLoader.success) {
+			self.notifyLatest(self.latestLoader.data);
+			self.clearUsageCache();
+		}
+	}
+}
+
+TepcoWatcher.prototype.initLoader2 = function() {
+	var self = this;
+	if (this.config.forecast_enabled) {
+		if (!this.forecastLoader) {
+			this.forecastLoader = new ForecastLoader;
+			// this.forecastLoader.interval = this.config.forecast_update_interval;
+			this.forecastLoader.__defineGetter__('interval',function(){ return self.config.forecast_update_interval });
+		}
+	} else if (this.forecastLoader) {
+		this.forecastLoader.stopTimer();
+		this.forecastLoader = null;
+	}
+
+	if (this.config.twitter_enabled) {
+		if (!this.tweetLoader) {
+			this.tweetLoader = new TweetLoader;
+			//this.tweetLoader.interval = this.config.update_twitter_interval;
+			this.tweetLoader.__defineGetter__('interval',function(){ return self.config.twitter_update_interval });
+			this.tweetLoader.oncomplete = function() {
+				self.sendResponse('rspTweetData', self.tweetLoader);
+				if (self.tweetLoader.success) {
+					self.notifyTweet(self.tweetLoader.data);
+				}
+			}
+		}
+		this.tweetLoader.url = this.tweetLoader.timeline_url(this.config.twitter_username);
+	} else if (this.tweetLoader) {
+		this.tweetLoader.stopTimer();
+		this.tweetLoader = null;
+	}
+}
+
+TepcoWatcher.prototype.startLoader = function() {
+	this.latestLoader.load();
+	if (this.forecastLoader) {
+		this.forecastLoader.load();
+	}
+	if (this.tweetLoader) {
+		this.tweetLoader.load();
+	}
+}
+
+TepcoWatcher.prototype.reload = function() {
+	// console.log("========== reload ==========");
+	this.config.load();
+	this.initLoader2();
+	this.startLoader();
+}
+
+TepcoWatcher.prototype.onRequest = function (request, sender, callback) {
+	switch (request.action) {
+	case 'reqConfigReload':
+		this.reload();
+		break;
+	case 'reqLatestData':
+		if (this.latestLoader.success) {
+			this.sendResponse('rspLatestData', this.latestLoader);
+		} else {
+			this.latestLoader.load();
+		}
+		break;
+	case 'reqTweetData':
+		if (this.tweetLoader.success) {
+			this.sendResponse('rspTweetData', this.tweetLoader);
+		} else {
+			this.tweetLoader.load();
+		}
+		break;
+	case 'reqUsageData':
+		this.getUsageData(request.dates);
+		break;
+	}
+}
+
+TepcoWatcher.prototype.sendResponse = function(msg_action, loader) {
+	var msg = { action: msg_action } ;
+	if (loader) {
+		msg.enabled = true;
+		msg.name = loader.name;
+		msg.success = loader.success;
+		msg.data = loader.data;
+	} else {
+		msg.enabled = false;
+	}
+	chrome.extension.sendRequest(msg);
+}
+
+TepcoWatcher.prototype.paddingForecast = function(loader) {
+	// 24時間分のデータが揃っている場合は何もしない
+	if (loader.success && loader.data.length == 24) {
+		return;
+	}
+	if (this.forecastLoader == null) {
+		return;
+	}
+	// 予報データが無い場合は何もしない
+	var date_str = UsageLoader.prototype.dateToString(loader.date, 'day');
+	var forecast = this.forecastLoader.forecast[date_str];
+	if (!forecast) {
+		return;
+	}
+	var i = 0;
+	if (loader.data) {
+		i = loader.data.length;
+	} else {
+		loader.data = [];
+	}
+	for ( ; i<24 ; i++) {
+		if (!forecast[i]) {
+			break;
+		}
+		var padding = {
+			forecast: true,
+			saving: false,
+			usage: forecast[i].usage,
+			capacity: forecast[i].capacity,
+			year: loader.date.getFullYear(),
+			month: loader.date.getMonth() + 1,
+			day: loader.date.getDate(),
+		};
+		loader.data[i] = padding;
+	}
+}
+
+TepcoWatcher.prototype.usageCompleteHandler = function(loader) {
+	var self = this;
+	return function() {
+		self.paddingForecast(loader);
+	}
+}
+
+TepcoWatcher.prototype.getUsageData = function(dates) {
+	function usage_cache_key(date) {
+		return 'usage_' + date;
+	}
+
+	var usageLoader = new GroupLoader;
+	var self = this;
+	for (var i=0 ; i<dates.length ; i++) {
+		var loader = new UsageLoader({date: dates[i]});
+		var cached_data = self.cache.loadCache(usage_cache_key(loader.date_str));
+		if (cached_data != null) {
+			loader.setCacheData(cached_data);
+		}
+		loader.oncomplete = this.usageCompleteHandler(loader);
+		usageLoader.addLoader(loader);
+	}
+	usageLoader.oncomplete = function() {
+		// [DEBUG] データ読み出し遅延試験用
+		// setTimeout(function(){self.sendResponse('rspUsageData', usageLoader);}, 500);
+
+		self.sendResponse('rspUsageData', usageLoader);
+
+		for (var i=0 ; i<usageLoader.group.length ; i++) {
+			var loader = usageLoader.group[i];
+			if (loader.success && !loader.cached) {
+				self.cache.storeCache(usage_cache_key(loader.date_str), loader.data);
+			}
+		}
+	}
+	usageLoader.load();
+}
+
+TepcoWatcher.prototype.clearUsageCache = function () {
+	var cache = this.cache;
+	var keys = [];
+	for (var key in cache.cache_hash) {
+		if (key.match(/^usage_/)) {
+			var c = cache.cache_hash[key];
+			if (c.data && (c.data.length < 24 || c.data[c.data.length-1].forecast)) {
+				// 24時間分のデータがそろっていない場合、または予報を含む場合はキャッシュクリアする
+				keys.push(key);
+			}
+		}
+	}
+	for (var i=0 ; i<keys.length ; i++) {
+		cache.clearCache(keys[i]);
+	}
+}
+
+TepcoWatcher.prototype.notifyLatest = function (data) {
+	var time = new Date(data.usage_updated).getTime();
+	var do_notify = this.config.notify_anytime ? true : false;
+	if (this.status.latest_data_time < time) {
+		this.status.latest_data_time = time;	// 最新データ更新あり（常時表示モードでない場合も含む）
+	} else if (!do_notify) {
+		return;					// 更新なし＆常時表示モードでないので終了
+	}
+	if (do_notify) {
+		// すでに表示決定なのでスルー
+	} else if (data.usage_rate >= this.config.notify_threshold) {
+		do_notify = true;
+	} else if (data.saving && this.config.notify_in_saving) {
+		do_notify = true;
+	}
+	if (do_notify) {
+		if (this.config.notify_enabled) {
+			var notifier = new LatestNotifier(data);
+			notifier.timeout = this.config.notify_timeout;
+			notifier.show();
+		}
+	}
+}
+
+TepcoWatcher.prototype.notifyTweet = function (tweets) {
+	var latest_tweet_time = this.status.latest_tweet_time;
+	var unread_tweets = tweets.length;
+	if (unread_tweets == 0) {
+		// ツイートが取得できなかった？
+		return;
+	}
+	for (var i=0 ; i<tweets.length ; i++) {
+		if (latest_tweet_time >= tweets[i].time) {
+			unread_tweets = i;	// find old tweet!
+			break;
+		}
+	}
+	if (this.config.notify_anytime || (this.config.twitter_notify && unread_tweets > 0)) {
+		if (this.config.notify_enabled) {
+			var notifier = new TweetNotifier(tweets[0]);
+			if (unread_tweets > 0) {
+				notifier.title += " (" + unread_tweets + " new tweets)";
+			}
+			notifier.timeout = this.config.notify_timeout;
+			notifier.show();
+		}
+		this.status.latest_tweet_time = tweets[0].time;
+	}
+	console.log("notifyTweet: unread_tweets=" + unread_tweets + ", latest_tweet_time=" + this.status.latest_tweet_time);
+}
+
+TepcoWatcher.prototype.updateBadge = function() {
+	var badge_text;
+	var iconPath;
+	if (!this.latestLoader.success) {
+		badge_text = 'ERR';
+	} else if (this.latestLoader.data.usage_rate < 0) {
+		badge_text = '???';
+	} else {
+		badge_text = this.latestLoader.data.usage_rate.toFixed(1);
+	}
+	chrome.browserAction.setBadgeText({ "text": badge_text });
+
+	iconPath = this.latestLoader.data.saving ? "icon_off48.png" : "icon_on48.png";
+	chrome.browserAction.setIcon({ "path": iconPath });
+}
+
+var tw=null;
+$(document).ready(function(){
+	tw = new TepcoWatcher;
+	tw.startLoader();
+});
+})();
+</script>
+</head>
+<body>
+</body>
+</html>

@@ -1,0 +1,748 @@
+﻿<html>
+<head>
+<meta charset="utf-8">
+<title>東京電力 Watch</title>
+<script language="javascript" type="text/javascript" src="jqplot/jquery-1.4.4.min.js"></script>
+<script language="javascript" type="text/javascript" src="jqplot/jquery.jqplot.min.js"></script>
+<script language="javascript" type="text/javascript" src="jqplot/plugins/jqplot.cursor.min.js"></script>
+<script language="javascript" type="text/javascript" src="jqplot/plugins/jqplot.barRenderer.min.js"></script>
+<script language="javascript" type="text/javascript" src="jqplot/plugins/jqplot.categoryAxisRenderer.min.js"></script>
+<script language="javascript" type="text/javascript" src="common.js"></script>
+<link rel="stylesheet" type="text/css" href="jqplot/jquery.jqplot.min.css" />
+<link rel="stylesheet" type="text/css" href="popup.css" />
+<script type="text/javascript">
+
+(function(){
+//---------------------------------------------------------
+// Status
+//---------------------------------------------------------
+PopupStatus = function() {
+	this.define('compare_yesterday'		,true);
+	this.define('compare_lastweek'		,false);
+	this.define('percent_mode'		,false);
+	this.define('bottomcut_mode'		,false);
+	this.__name = 'popup';
+	this.__autosave = true;
+}
+PopupStatus.prototype = new Config();
+
+//---------------------------------------------------------
+var max_capacity_default = 6000;
+var y_tickInterval = 1000;
+var busy = { latest: false, usage: false };
+
+var view_date;
+var move_date;
+var graph_side = 0;
+var tweet_pasttime_timer;
+var preloading = true;
+
+var config = new TepcoWatcherConfig;
+var status = new PopupStatus;
+
+const DATE_1DAY_OFFSET	= 24 * 60 * 60 * 1000;
+
+const KEYCODE_LEFT	= 37;
+const KEYCODE_UP	= 38;
+const KEYCODE_RIGHT	= 39;
+const KEYCODE_DOWN	= 40;
+
+function jqplot_today(arg) {
+	var config = {
+		label: '当日実績', shadow: false, renderer: $.jqplot.BarRenderer, rendererOptions: {barMargin: 14}
+	};
+	for (var i in arg) { config[i] = arg[i]; }
+	return config;
+}
+
+function jqplot_yesterday(arg) {
+	var config = {
+		label: '前日実績', markerOptions: {size: 6}
+	};
+	for (var i in arg) { config[i] = arg[i]; }
+	return config;
+}
+
+function jqplot_capacity(arg) {
+	var config = {
+		label: '供給力', showLabel: false, lineWidth: 1, markerOptions: {show: true, size: 3}
+	};
+	for (var i in arg) { config[i] = arg[i]; }
+	return config;
+};
+
+function jqplot_default(arg) {
+	var config = {
+		legend: {
+			show: true, location: 'sw',
+			// xoffset: 6, yoffset: 6,
+		},
+		series: [],
+		axes: {
+			xaxis: {
+				renderer: $.jqplot.CategoryAxisRenderer, 
+				ticks: (function(){var a=[];for(var i=0;i<24;i++){a.push(i.toString())};return a})(),
+			},
+			yaxis: {
+				min: 0,
+				max: max_capacity_default,
+				tickOptions: { formatString: '%d' },
+				tickInterval: y_tickInterval,
+			},
+		},
+		cursor: {  
+			show: true,
+			showVerticalLine: false,
+			showHorizontalLine: true,
+			showCursorLegend: false,
+			showTooltip: false,
+			zoom: true,
+			dblClickReset: true,
+		},
+	};
+	for (var i in arg) { config[i] = arg[i]; }
+	return config;
+};
+
+function setBusy(type) {
+	if (busy[type]) {
+		return -1;
+	}
+	busy[type] = true;
+	switch (type) {
+	case 'usage':
+		// $('.navi_button').attr("disabled","disabled");
+		break;
+	}
+	return 0;
+}
+
+function clearBusy(type) {
+	busy[type] = false;
+	switch (type) {
+	case 'usage':
+		// $('.navi_button').removeAttr("disabled");
+		break;
+	}
+}
+
+function onRequest(request, sender, callback) {
+	switch (request.action) {
+	case 'rspLatestData':
+		updateLatestView(request.data, function(){ clearBusy('latest'); resize(); });
+		break;
+
+	case 'rspUsageData':
+		updateGraphView(request.data, function(){ clearBusy('usage') });
+		break;
+
+	case 'rspTweetData':
+		updateTweetView(request.data, function(){ clearBusy('tweet') });
+		break;
+
+// 	case 'rspMukkuDone':
+// 		updateMukkuView(request.data, function(){ clearBusy('mukku') });
+// 		break;
+	}
+}
+
+function updateLatestView(data, callback) {
+	// アイコンの設定
+	if (data.saving) {
+		$('#icon').attr("src", "icon_off48.png");
+		$('#saving').attr('class', 'saving_on').text("計画停電：実施中です！");
+	} else {
+		$('#icon').attr("src", "icon_on48.png");
+		$('#saving').attr('class', 'saving_off').text("計画停電：実施していません");
+	}
+
+	// 使用率表示
+	var latest_usage = '現在 ' + data.usage + ' 万kW【' + data.usage_rate.toFixed(1) + '%】使用中';
+	$('#usage').text(latest_usage);
+
+	// 予想最大電力／ピーク時供給力
+	var capacity_info = '予想需要 ' + data.forecast_peak_usage + ' 万kW(' + data.forecast_peak_period + '時台)';
+	capacity_info += ' ／ ';
+	capacity_info += '最大供給力 ' + data.capacity + ' 万kW(' + data.capacity_peak_period + '時台)';
+	$('#capacity_info').text(capacity_info);
+
+	// データ読み込み日時の更新
+	var usage_updated = new Date(data.usage_updated);
+	$("#updated").text(usage_updated.toLocaleDateString() + ' ' + usage_updated.toLocaleTimeString());
+
+	// グラフ表示日が未設定の場合、最新日に移動（初回時・更新時）
+	if (!view_date) {
+		view_date = new Date(data.year, data.month-1, data.day);
+		if (config.graph_enabled) {
+			moveDate(0);
+		} else {
+			preloadingDone();
+		}
+	}
+	callback();
+}
+
+function preloadingNone() {
+	if (preloading) {
+		$('#preloading_div').hide();
+		preloading = false;
+	}
+}
+function preloadingDone() {
+	if (preloading) {
+		if (config.graph_fx_off) {
+			$('#preloading_div').hide();
+		} else {
+			$('#preloading_div').fadeOut(config.graph_fadetime);
+		}
+		preloading = false;
+	}
+}
+
+function updateGraphView(data, callback) {
+	if (!config.graph_enabled) {
+		return;
+	}
+	var y_max = 0;
+	var y_min = 10000000;
+	var y_data = [];
+	var plot_date;
+	var plot_capacity = status.percent_mode ? false : true;
+	var jqplot_config = jqplot_default();
+	
+	function check_max(y) {
+		if (y_max < y) {
+			y_max = y;
+		}
+		if (y_min > y) {
+			y_min = y;
+		}
+	}
+	function date_label(date, saving, forecast) {
+		var label = date.toLocaleDateString();
+		var opt = '';
+		if (saving) {
+			opt += '【停電】';
+		}
+		if (forecast) {
+			opt += '［予報］';
+		}
+		if (opt) {
+			label += ' ' + opt;
+		}
+		return label;
+	}
+	function graph_toggleside() {
+		graph_side = graph_getside(false);
+	}
+	function graph_getside(currentside) {
+		return currentside ? graph_side : ((graph_side + 1) & 1);
+	}
+	function graph_getid(currentside) {
+		var side = graph_getside(currentside);
+		return 'graph' + side;
+	}
+	function data_prepare() {
+		// ロードしたデータを jqPlot に渡す準備を行う
+		for (var i=0 ; i<data.length ; i++) {
+			var usage = data[i];
+			if (!usage || usage.length == 0) {
+				continue;
+			}
+			var date = new Date(usage[0].year, usage[0].month-1, usage[0].day);
+			if (i == 0) {
+				// 当日データの場合（配列の先頭を当日としている）
+				var y_usage_normal = [];
+				var y_usage_saving = [];
+				var y_usage_forecast = [];
+				var y_capacity = [];
+				var normal = 0;
+				var saving = 0;
+				var forecast = 0;
+				for (var t=0 ; t<usage.length ; t++) {
+					var y_value = status.percent_mode ? (100 * usage[t].usage / usage[t].capacity) : usage[t].usage;
+					if (usage[t].saving) {
+						y_usage_normal.push(0);
+						y_usage_saving.push(y_value);
+						y_usage_forecast.push(0);
+						++saving;
+					} else if (usage[t].forecast) {
+						y_usage_normal.push(0);
+						y_usage_saving.push(0);
+						y_usage_forecast.push(y_value);
+						++forecast;
+					} else {
+						y_usage_normal.push(y_value);
+						y_usage_saving.push(0);
+						y_usage_forecast.push(0);
+						++normal;
+					}
+					if (plot_capacity) {
+						y_capacity.push(usage[t].capacity);
+						check_max(usage[t].capacity);
+					}
+					check_max(usage[t].usage);
+				}
+				jqplot_config.series.push(jqplot_today(normal   ? {label: date_label(date)}              : {showLabel: false} ));
+				jqplot_config.series.push(jqplot_today(saving   ? {label: date_label(date, saving, 0)}   : {showLabel: false} ));
+				jqplot_config.series.push(jqplot_today(forecast ? {label: date_label(date, 0, forecast)} : {showLabel: false} ));
+				y_data.push(y_usage_normal);
+				y_data.push(y_usage_saving);
+				y_data.push(y_usage_forecast);
+				if (plot_capacity) {
+					jqplot_config.series.push(jqplot_capacity());
+					y_data.push(y_capacity);
+				}
+				plot_date = date;
+			} else {
+				var y_usage = [];
+				var saving = 0;
+				var forecast = 0;
+				for (var t=0 ; t<usage.length ; t++) {
+					var y_value = status.percent_mode ? (100 * usage[t].usage / usage[t].capacity) : usage[t].usage;
+					y_usage.push(y_value);
+					check_max(y_value);
+					saving += !!usage[t].saving;
+					forecast += !!usage[t].forecast;
+				}
+				var series = jqplot_yesterday({label: date_label(date, saving, forecast)});
+				jqplot_config.series.push(series);
+				y_data.push(y_usage);
+			}
+		}
+	}
+
+	function draw_graph () {
+		if (plot_date && y_data.length > 0) {
+			// jqplot_config.title = view_date.toLocaleDateString(true);
+			// Y軸最大値を調整
+			if (status.percent_mode) {
+				jqplot_config.axes.yaxis.max = 100;
+				jqplot_config.axes.yaxis.tickInterval = 10;
+				if (status.bottomcut_mode) {
+					jqplot_config.axes.yaxis.min = 50;
+					jqplot_config.axes.yaxis.tickInterval = 5;
+				}
+			} else {
+				// jqplot_config.axes.yaxis.max = y_max + (y_tickInterval / 2);
+				jqplot_config.axes.yaxis.max = y_max;
+				if (status.bottomcut_mode) {
+					var y_tick = parseInt(y_tickInterval / 2);
+					jqplot_config.axes.yaxis.tickInterval = y_tick;
+					jqplot_config.axes.yaxis.min = parseInt(y_min / y_tick) * y_tick;
+				}
+			}
+			// グラフを生成する
+			new_graph.empty();
+			new_graph_outer.show();	// 一旦 show しないと jqplot がグラフを描画してくれない
+			$.jqplot(new_graph_id, y_data, jqplot_config);
+			new_graph_outer.hide();
+			// 凡例の行間を詰める
+			$("td.jqplot-table-legend").css('padding-top', '2px');
+			$(".jqplot-table-legend").hide();
+		} else {
+			var msg = "＜データがありません＞";
+			var table = '<table width="100%" height="100%" class="glaph_error">';
+			table += '<tr><td align="center" valign="middle">' + msg + '</td></tr></table>';
+			new_graph.empty();
+			new_graph.removeAttr('class');
+			new_graph.append(table);
+		}
+		new_graph_outer.css('z-index', 2);
+		old_graph_outer.css('z-index', 1);
+	}
+
+	function draw_after() {
+		view_date = move_date;
+		$('#update_data').val(view_date.toLocaleDateString(true));
+		old_graph_outer.hide();
+		old_graph.empty();
+		graph_toggleside();
+ 		$(".jqplot-event-canvas").hover(
+			function(){ $(".jqplot-table-legend").fadeIn(); },
+			function(){ $(".jqplot-table-legend").fadeOut(); }
+		);
+		callback();
+	}
+
+	var new_graph_id = graph_getid(true);
+	var new_graph = $('#' + new_graph_id);
+	var new_graph_outer = $('#' + new_graph_id + '_outer');
+
+	var old_graph_id = graph_getid(false);
+	var old_graph = $('#' + old_graph_id);
+	var old_graph_outer = $('#' + old_graph_id + '_outer');
+
+	data_prepare();
+	draw_graph();
+
+	if (preloading) {
+		new_graph_outer.show();
+		draw_after();
+		preloadingDone();
+	} else {
+		if (config.graph_fx_off) {
+			new_graph_outer.show();
+			draw_after();
+		} else {
+			new_graph_outer.fadeIn(config.graph_fadetime, draw_after);
+		}
+	}
+}
+
+// function updateMukkuView(data, callback) {
+// 	if (!data || data.ResultInfo.Status != 'OK') {
+// 		$('#mukku_info').text('計画停電情報が取得できませんでした。');
+// 		return;
+// 	}
+// 	var text = '';
+// 	text += data.ResultInfo.PowerCutTime;
+// 	$('#mukku_info').text(text);
+// 	callback();
+// }
+
+function updateTweetTime() {
+	if (!config.twitter_enabled) {
+		return;
+	}
+	function pasttimeText(msec) {
+		var sec = Math.floor(msec / 1000);
+		if (sec < 60) {
+			return sec + '秒前';
+		}
+		var min = Math.floor(sec / 60); sec %= 60;
+		if (min < 60) {
+			return min + '分' + sec + '秒前';
+		}
+		var hour = Math.floor(min / 60); min %= 60;
+		if (hour < 24) {
+			return hour + '時間' + min + '分前';
+		}
+		var day = Math.floor(hour / 24); hour %= 24;
+		return day + '日と' + hour + '時間前';
+	}
+	var now = new Date();
+	var date = new Date();
+	$('#tweet_table tbody').each(function(){
+		var time = $(".tweet_time", this).text();
+		date.setTime(time);
+		var datetext = date.toLocaleDateString() + ' ' + date.toLocaleTimeString();
+		datetext += ' (' + pasttimeText(now.getTime() - time) + ')';
+		$(".tweet_date", this).text(datetext);
+	});
+
+	if (tweet_pasttime_timer != null) {
+		clearTimeout(tweet_pasttime_timer);
+	}
+	tweet_pasttime_timer = setTimeout(updateTweetTime, 60 * 1000);
+}
+
+function updateTweetView(data, callback) {
+	if (!config.twitter_enabled) {
+		return;
+	}
+	var table = $('#tweet_table');
+	table.empty();
+	if (data && data.length > 0) {
+		var tbody_templete = $('#tweet_templete tbody:first-child');
+		var now = new Date();
+		for (var i=0 ; i<data.length && i<config.twitter_view_max; i++) {
+			var tweet = data[i];
+			var date = new Date(tweet.created_at);
+	 		var pasttime = now.getTime() - date.getTime();
+			if (pasttime > config.twitter_view_duration && i >= config.twitter_view_min) {
+				break;
+			}
+			var tbody = tbody_templete.clone(true);
+			$('.tweet_icon', tbody).attr('src', tweet.image_url);
+			$('.tweet_link', tbody).attr('href', tweet.tweet_link);
+			$('.tweet_name', tbody).attr('href', tweet.user_link).text(tweet.screen_name);
+			$(".tweet_date", tbody).text("");
+			$(".tweet_time", tbody).text(date.getTime());
+			$('.tweet_text', tbody).text(tweet.text);
+			table.append(tbody);
+		}
+		updateTweetTime();
+	} else {
+		var msg = "＜ツイートが取得できません＞";
+		var tbody = '<tbody class="glaph_error"><tr><td align="center" valign="middle">' + msg + '</td></tr></tbody>';
+		table.append(tbody);
+	}
+	callback();
+}
+
+function moveDate(move) {
+	if (!config.graph_enabled) {
+		return;
+	}
+	if (setBusy('usage') < 0) {
+		return;
+	}
+	function offsetDate(date, offset) {
+		return new Date(date.getTime() + offset * DATE_1DAY_OFFSET);
+	}
+	var dates_list = [];
+	dates_list.add = function(date) { this.push(date.toDateString()) };
+
+	move_date = offsetDate(view_date, move);
+	dates_list.add(move_date);
+	if (status.compare_yesterday) {
+		dates_list.add(offsetDate(move_date, -1));
+	}
+	if (status.compare_lastweek) {
+		dates_list.add(offsetDate(move_date, -7));
+	}
+	chrome.extension.sendRequest({action: "reqUsageData", dates: dates_list});
+}
+
+function graphOption() {
+	var type = this.name;
+	switch (type) {
+	case 'yesterday':
+	case 'lastweek':
+		status['compare_' + type] = this.checked;
+		break;
+	case 'percent':
+	case 'bottomcut':
+		status[type + '_mode'] = this.checked;
+		break;
+	default:
+		return;
+	}
+	moveDate(0);
+}
+
+function updateLatestData() {
+	setBusy('latest');
+	view_date = null;
+	chrome.extension.sendRequest({action: "reqLatestData"});
+}
+
+function updateTweetData() {
+	if (!config.twitter_enabled) {
+		return;
+	}
+	setBusy('tweet');
+	chrome.extension.sendRequest({action: "reqTweetData"});
+}
+
+// function updateMukkuData() {
+// 	setBusy('mukku');
+// 	chrome.extension.sendRequest({action: "reqMukkuData"});
+// }
+
+function resize() {
+	if (!config.twitter_enabled) {
+		$('#tweet_area').hide();
+	}
+	if (!config.graph_enabled) {
+		$('#graph_area').hide();
+		$('#navi_area').hide();
+	}
+	if (!config.twitter_enabled && !config.graph_enabled) {
+		preloadingNone();
+	}
+
+	var table_width = $('#main_table').outerWidth(true);
+	var table_height = $('#main_table').outerHeight(true);
+
+	// console.log("resize: " + table_width + "x" + table_height);
+
+	$(".resize_target").width(table_width);
+	$(".resize_target").height(table_height);
+	
+	$('html').width($('body').outerWidth(true));
+	$('html').height($('body').outerHeight(true));
+}
+
+function start() {
+	chrome.extension.onRequest.addListener(onRequest);
+	updateLatestData();
+	updateTweetData();
+	// updateMukkuData(); //（開発中）
+}
+
+function init_graph_ctrl() {
+	if (!config.graph_enabled) {
+		return;
+	}
+	
+	$('#chk_yesterday').attr('checked', !!status.compare_yesterday).click(graphOption);
+	$('#chk_lastweek').attr('checked', !!status.compare_lastweek).click(graphOption);
+	$('#chk_percent').attr('checked', !!status.percent_mode).click(graphOption);
+	$('#chk_bottomcut').attr('checked', !!status.bottomcut_mode).click(graphOption);
+	
+	$('#move_prev').click(function(){moveDate(-1)});
+	$('#move_next').click(function(){moveDate(+1)});
+	$('#update_data').click(updateLatestData).val(new Date().toLocaleDateString(true));
+
+	var panel = $('#navi_panel');
+	var option = $('#navi_option');
+	panel.width(option.outerWidth());
+	var offset = panel.offset();
+	offset.top  = offset.top  + panel.outerHeight() - option.outerHeight() - 0;
+	offset.left = offset.left + panel.outerWidth()  - option.outerWidth()  + 0;
+	option.offset(offset);
+
+	$('#navi_open').hover(
+		function(){ $(this).attr('class', 'navi_open_on'); },
+		function(){ $(this).attr('class', 'navi_open_off'); }
+	);
+	$('#navi_open').click(function(){ $('#navi_option').show(); });
+	$('#navi_close').click(function(){ $('#navi_option').hide(); });
+
+	$(window).keyup(function(e){
+		switch (e.keyCode) {
+		case KEYCODE_LEFT:	moveDate(-1); break;
+		case KEYCODE_UP:	moveDate(-7); break;
+		case KEYCODE_RIGHT:	moveDate(+1); break;
+		case KEYCODE_DOWN:	moveDate(+7); break;
+		}
+	});
+}
+
+$(document).ready(function(){
+	config.load();
+	status.load();
+	$('a').click(openTab);
+	resize();
+	init_graph_ctrl();
+	start();
+});
+})();
+</script>
+
+</head>
+<body class="resize_target">
+<div class="resize_target" id="main_div">
+<div class="resize_target" id="preloading_div">
+  <table width="100%" height="100%">
+  <tr align="center" valign="middle"><td><img src="preloading.gif" /></td></tr>
+  </table>
+</div>
+<div class="resize_target" id="table_div">
+<table id="main_table" cellpadding="0">
+
+ <tr>
+   <td>
+   <div>
+   <table width="100%" cellpadding="0" style="border-spacing: 4px">
+   <tr>
+     <td rowspan=4 valign="top">
+       <a href="http://www.tepco.co.jp/forecast/index-j.html"><img src="icon_off48.png" id="icon"></a>&nbsp;&nbsp;
+     </td>
+     <td colspan=2 ><span id="usage">現在の電力使用量</span></td>
+   </tr>
+   <tr>
+     <td width="65%" align="center"><div width="100%" id="saving" class="saving_off">計画停電</div></td>
+     <td width="35%" align="right" class="updated"><span id="updated">更新時間</span></td>
+   </tr>
+   <tr>
+     <td colspan=2 align="center">
+       <div class="tepco_div"><span id="capacity_info">電力供給量情報</span></div>
+     </td>
+   </tr>
+   </table>
+   </div>
+   </td>
+ </tr>
+
+ <tr id="tweet_area">
+   <td id="tweet_td">
+     <div id="tweet_div">
+      <!-- この table に含まれる tbody をコピーして、下の table にペーストする -->
+      <table width="100%" cellpadding="0" id="tweet_templete">
+      <tbody>
+        <tr>
+          <td rowspan=2 valign="top"><a class="tweet_link"><img class="tweet_icon"></a>&nbsp;&nbsp;</td>
+          <td align="left"><a class="tweet_name">名前</a></td>
+          <td align="right"><span class="tweet_date">時間</span><span class="tweet_time"></span></td>
+        </tr>
+        <tr>
+          <td colspan=3 valign="top" height="100%" width="100%"><span class="tweet_text" id="tweet_text">つぶやき</span></td>
+        </tr>
+      </tbody>
+
+      </table>
+      <table width="100%" height="100%" cellpadding="0" id="tweet_table">
+      </table>
+    </div>
+   </td>
+ </tr>
+
+ <!--
+ <tr>
+   <td>
+     <div id="mukku_info">mukku_info</div>
+   </td>
+ </tr>
+ -->
+
+ <tr id="graph_area">
+   <td class="graph_td" align="center">
+     <div class="graph_wrapper">
+     <div class="graph_outer" id="graph0_outer"><div id="graph0"></div></div>
+     <div class="graph_outer" id="graph1_outer"><div id="graph1"></div></div>
+     </div>
+   </td>
+ </tr>
+
+ <tr id="navi_area">
+   <td align="center">
+   <table width="100%">
+    <tr class="navi">
+     <td align="left" width="25%" class="navi_ctrl">
+     </td>
+     <td align="center" width="50%" class="navi_move">
+       <input type="button" value=" 前日 " class="navi_button" id="move_prev" />
+       <input type="button" value=" 当日 " class="navi_button" id="update_data" />
+       <input type="button" value=" 翌日 " class="navi_button" id="move_next" />
+     </td>
+     <td align="right" width="25%" class="navi_ctrl">
+
+<table cellpadding="2" id="navi_panel">
+<tr><td align="center" id="navi_open" class="navi_open_off">グラフ設定</td></tr>
+</table>
+       
+     </td>
+    </tr>
+   </table>
+   </td>
+ </tr>
+
+ <tr id="credit_area">
+   <td align="center">
+   <hr color="#c0c0c0" size="2px" style="-webkit-margin-after: 0px;">
+   <table width="100%">
+    <tr  class="navi">
+     <td align="left">
+     <!-- 「クレジット表示ガイドライン」および「クレジット配置ルール」に合わせて margin を微調整 -->
+<!-- Begin Yahoo! JAPAN Web Services Attribution Snippet -->
+<a href="http://developer.yahoo.co.jp/about">
+<img src="http://i.yimg.jp/images/yjdn/yjdn_attbtn1_125_17.gif" title="Webサービス by Yahoo! JAPAN" alt="Web Services by Yahoo! JAPAN" width="125" height="17" border="0" style="margin:4px 7px 7px 7px"></a>
+<!-- End Yahoo! JAPAN Web Services Attribution Snippet -->
+     </td>
+     <td align="right" valign="top">
+     <div style="margin:4px 7px 7px 7px">
+     <a href="http://tepco-usage-api.appspot.com/">東京電力電力供給状況API</a>&nbsp;
+     <a href="http://www.jqplot.com/">jqPlot</a>
+     </div>
+     </td>
+    </tr>
+   </table>
+   </td>
+ </tr>
+</table>
+</div>
+</div>
+
+<table cellpadding="2" style="display: none;" id="navi_option">
+<tr><td><input type="checkbox" name="yesterday" id="chk_yesterday" checked>前日と比較</input></td></tr>
+<tr><td><input type="checkbox" name="lastweek"  id="chk_lastweek">先週と比較</input></td></tr>
+<tr><td><input type="checkbox" name="percent"   id="chk_percent">％で表示</input></td></tr>
+<tr><td><input type="checkbox" name="bottomcut" id="chk_bottomcut">下限カット</input></td></tr>
+<tr><td align="center" id="navi_close">閉じる</td></tr>
+</table>
+
+</body>
+</html>
