@@ -85,9 +85,10 @@
 		this.define('cache_timeout'				,60 * 60 * 1000);	// 1時間
 		
 		this.define('forecast_enabled'			,true);
-		this.define('forecast_update_interval'	,6 * 60 * 60 * 1000);	// 6時間
+		this.define('forecast_update_interval'	,3 * 60 * 60 * 1000);	// 3時間
 
-		this.define('latest_update_interval'	,10 * 60 * 1000);	//  10分
+		this.define('quick_update_interval'		, 2 * 60 * 1000);	//  2分
+		this.define('latest_update_interval'	,15 * 60 * 1000);	//  15分
 
 		this.define('graph_enabled'				,true);
 		this.define('graph_fx_off'				,false);
@@ -101,7 +102,9 @@
 		this.define('twitter_view_max'			,100);				// 最大で表示するツイート数
 		this.define('twitter_view_duration'		,3 * 24 * 60 * 60 * 1000);
 
-		this.define('mukku_update_interval'		,60 * 60 * 1000);	// 1時間
+		this.define('mukku_enabled'				,true);
+		this.define('mukku_update_interval'		,3 * 60 * 60 * 1000);	// 3時間
+		this.define('mukku_group'				,"");
 	}
 	TepcoWatcherConfig.prototype = new Config();
 })();

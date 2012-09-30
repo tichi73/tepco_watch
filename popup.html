@@ -128,6 +128,10 @@ function clearBusy(type) {
 
 function onRequest(request, sender, callback) {
 	switch (request.action) {
+	case 'rspQuickData':
+		updateQuickView(request.data, function(){ clearBusy('quick'); });
+		break;
+
 	case 'rspLatestData':
 		updateLatestView(request.data, function(){ clearBusy('latest'); resize(); });
 		break;
@@ -140,10 +144,16 @@ function onRequest(request, sender, callback) {
 		updateTweetView(request.data, function(){ clearBusy('tweet') });
 		break;
 
-// 	case 'rspMukkuDone':
-// 		updateMukkuView(request.data, function(){ clearBusy('mukku') });
-// 		break;
+	case 'rspMukkuData':
+		updateMukkuView(request.data, function(){ clearBusy('mukku') });
+		break;
 	}
+}
+
+function updateQuickView(data, callback) {
+	// 使用率速報値表示
+	var quick_usage = data.usage + ' 万kW【' + data.usage_rate.toFixed(1) + '%】使用中 [' + data.date + ']';
+	$('#usage').text(quick_usage);
 }
 
 function updateLatestView(data, callback) {
@@ -156,9 +166,9 @@ function updateLatestView(data, callback) {
 		$('#saving').attr('class', 'saving_off').text("計画停電：実施していません");
 	}
 
-	// 使用率表示
-	var latest_usage = '現在 ' + data.usage + ' 万kW【' + data.usage_rate.toFixed(1) + '%】使用中';
-	$('#usage').text(latest_usage);
+	// 使用率表示 ⇒ 速報値で表示するように変更
+// 	var latest_usage = '現在 ' + data.usage + ' 万kW【' + data.usage_rate.toFixed(1) + '%】使用中';
+// 	$('#usage').text(latest_usage);
 
 	// 予想最大電力／ピーク時供給力
 	var capacity_info = '予想需要 ' + data.forecast_peak_usage + ' 万kW(' + data.forecast_peak_period + '時台)';
@@ -166,7 +176,7 @@ function updateLatestView(data, callback) {
 	capacity_info += '最大供給力 ' + data.capacity + ' 万kW(' + data.capacity_peak_period + '時台)';
 	$('#capacity_info').text(capacity_info);
 
-	// データ読み込み日時の更新
+// 	// データ読み込み日時の更新
 	var usage_updated = new Date(data.usage_updated);
 	$("#updated").text(usage_updated.toLocaleDateString() + ' ' + usage_updated.toLocaleTimeString());
 
@@ -390,16 +400,42 @@ function updateGraphView(data, callback) {
 	}
 }
 
-// function updateMukkuView(data, callback) {
-// 	if (!data || data.ResultInfo.Status != 'OK') {
-// 		$('#mukku_info').text('計画停電情報が取得できませんでした。');
-// 		return;
-// 	}
-// 	var text = '';
-// 	text += data.ResultInfo.PowerCutTime;
-// 	$('#mukku_info').text(text);
-// 	callback();
-// }
+function updateMukkuView(data, callback) {
+	var mi = $('#mukku_info');
+	var mukku_on = false;
+	var text = '';
+
+	if (config.mukku_group == "") {
+		var options_url = chrome.extension.getURL("options.html");
+		var options_a = $(document.createElement('a'));
+		options_a.attr('href', options_url).attr('target', '_blank').text('[オプション]');
+		mi.empty();
+		mi.append(options_a);
+		mi.append(' から計画停電のグループ番号を設定してください');
+	} else {
+		var result = data.Result[config.mukku_group];
+		if (!result) {
+			mukku_on = true;
+			text = "計画停電の情報が取得できませんでした";
+		} else {
+			if (result.Count > 0) {
+				text = result.All + ' に計画停電が予定されています [' + config.mukku_group + ']';
+				mukku_on = true;
+			} else {
+				text = '本日 グループ ' + config.mukku_group + ' に計画停電の予定はありません';
+			}
+		}
+		mi.text(text);
+	}
+	if (mukku_on) {
+		mi.addClass('mukku_on');
+		mi.removeClass('mukku_off');
+	} else {
+		mi.removeClass('mukku_on');
+		mi.addClass('mukku_off');
+	}
+	callback();
+}
 
 function updateTweetTime() {
 	if (!config.twitter_enabled) {
@@ -512,6 +548,11 @@ function graphOption() {
 	moveDate(0);
 }
 
+function updateQuickData() {
+	setBusy('quick');
+	chrome.extension.sendRequest({action: "reqQuickData"});
+}
+
 function updateLatestData() {
 	setBusy('latest');
 	view_date = null;
@@ -526,10 +567,10 @@ function updateTweetData() {
 	chrome.extension.sendRequest({action: "reqTweetData"});
 }
 
-// function updateMukkuData() {
-// 	setBusy('mukku');
-// 	chrome.extension.sendRequest({action: "reqMukkuData"});
-// }
+function updateMukkuData() {
+	setBusy('mukku');
+	chrome.extension.sendRequest({action: "reqMukkuData"});
+}
 
 function resize() {
 	if (!config.twitter_enabled) {
@@ -541,6 +582,9 @@ function resize() {
 	}
 	if (!config.twitter_enabled && !config.graph_enabled) {
 		preloadingNone();
+	}
+	if (!config.mukku_enabled) {
+		$('#mukku_area').hide();
 	}
 
 	var table_width = $('#main_table').outerWidth(true);
@@ -557,9 +601,10 @@ function resize() {
 
 function start() {
 	chrome.extension.onRequest.addListener(onRequest);
+	updateQuickData();
 	updateLatestData();
 	updateTweetData();
-	// updateMukkuData(); //（開発中）
+	updateMukkuData();
 }
 
 function init_graph_ctrl() {
@@ -637,6 +682,13 @@ $(document).ready(function(){
      <td width="65%" align="center"><div width="100%" id="saving" class="saving_off">計画停電</div></td>
      <td width="35%" align="right" class="updated"><span id="updated">更新時間</span></td>
    </tr>
+
+   <tr id="mukku_area">
+     <td colspan=2 align="center">
+       <div width="100%" id="mukku_info" class="mukku_div mukku_off">計画停電情報</div>
+     </td>
+   </tr>
+
    <tr>
      <td colspan=2 align="center">
        <div class="tepco_div"><span id="capacity_info">電力供給量情報</span></div>
@@ -669,14 +721,6 @@ $(document).ready(function(){
     </div>
    </td>
  </tr>
-
- <!--
- <tr>
-   <td>
-     <div id="mukku_info">mukku_info</div>
-   </td>
- </tr>
- -->
 
  <tr id="graph_area">
    <td class="graph_td" align="center">
@@ -725,6 +769,7 @@ $(document).ready(function(){
      <td align="right" valign="top">
      <div style="margin:4px 7px 7px 7px">
      <a href="http://tepco-usage-api.appspot.com/">東京電力電力供給状況API</a>&nbsp;
+     <a href="http://mukku.org/v2.00/">計画停電情報API</a>&nbsp;
      <a href="http://www.jqplot.com/">jqPlot</a>
      </div>
      </td>

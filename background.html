@@ -4,13 +4,16 @@
 <script language="javascript" type="text/javascript" src="jqplot/jquery-1.4.4.min.js"></script>
 <script language="javascript" type="text/javascript" src="common.js"></script>
 <script type="text/javascript">
+
 (function(){
+
+var tepco_usage_quick_url = 'http://tepco-usage-api.appspot.com/quick.txt';
 var tepco_usage_latest_url = 'http://tepco-usage-api.appspot.com/latest.json';
 var tepco_usage_date_url = 'http://tepco-usage-api.appspot.com/YYYYMMDD.json';
 var twitter_url = 'https://api.twitter.com/1/tichi73/lists/tepco-watch/statuses.json';
 var yahoo_forecast_url = 'http://setsuden.yahooapis.jp/v1/Setsuden/electricPowerForecast';
 var yahoo_forecast_appid ='u4Wn54Wxg67cSC8juregwvUc.VzyFj8tKzQspcxcl1b0pUstbI.CyYq75G0-';
-var mukku_url = 'http://mukku.org/v1.01/TGL/';
+var mukku_url = 'http://mukku.org/v2.00/TGL/?output=json';
 
 //---------------------------------------------------------
 // Status
@@ -264,6 +267,25 @@ ForecastLoader.prototype.onsuccess = function(data) {
 }
 
 //---------------------------------------------------------
+// QuickLoader
+//---------------------------------------------------------
+function QuickLoader () {}
+QuickLoader.prototype = new Loader();
+QuickLoader.prototype.name = 'QuickLoader';
+QuickLoader.prototype.url = tepco_usage_quick_url;
+QuickLoader.prototype.dataFilter = function(data, dataType) {
+	var vars = data.split(',');
+	var quick = {
+		date: vars[0],
+		usage: parseInt(vars[1]),
+		capacity: parseInt(vars[2]),
+	}
+	quick.usage_rate = (quick.capacity > 0) ? (100.0 * quick.usage / quick.capacity) : -1;
+	// console.log("quickLoader.dataFilter: [" + quick.date + "] " + quick.usage + " : " + quick.usage_rate.toFixed(1) + "%");
+	return quick;
+}
+
+//---------------------------------------------------------
 // UsageLoader
 //---------------------------------------------------------
 function UsageLoader (args) {
@@ -335,41 +357,41 @@ UsageLoader.prototype.onsuccess = function(data) {
 };
 
 //---------------------------------------------------------
-// MukkuLoader （未実装）
+// MukkuLoader
 //---------------------------------------------------------
-// function MukkuLoader () {}
-// MukkuLoader.prototype = new Loader();
-// MukkuLoader.prototype.url = mukku_url;
-// MukkuLoader.prototype.dataType = 'xml';
-// MukkuLoader.prototype.name = 'MukkuLoader';
-// MukkuLoader.prototype.dataFilter = function(data, dataType) {
-// 	// XML 形式のデータを必要なフィールドだけパースする
-// 	var ri = $('ResultInfo',data);
-// 	var mukku = {
-// 		ResultInfo: {
-// 			Status: $('Status', ri).text(),
-// 			PowerCutTime: $('PowerCutTime', $('LastUpDate', ri)).text(),
-// 			GroupData: $('GroupData', $('LastUpDate', ri)).text(),
-// 			SystemVersion: $('SystemVersion', ri).text(),
-// 		},
-// 		Result: [],
-// 	};
-// 	$("TimeGroup",data).each(function(){
-// 		var TimeGroup = {
-// 			Group: $('Group', this).text(),
-// 			SubGroup: $('SubGroup', this).text(),
-// 			GroupID: $('GroupID', this).text(),
-// 			All: $('All', this).text(),
-// 			Count: $('Count', this).text(),
-// 			Start: $('Start', this).text().split(/,/),
-// 			End: $('End', this).text().split(/,/),
-// 			StartRfc: $('StartRfc', this).text().split(/;/),
-// 			EndRfc: $('EndRfc', this).text().split(/;/),
-// 		};
-// 		mukku.Result.push(TimeGroup);
-// 	});
-// 	return mukku;
-// };
+function MukkuLoader () {}
+MukkuLoader.prototype = new Loader();
+MukkuLoader.prototype.url = mukku_url;
+MukkuLoader.prototype.name = 'MukkuLoader';
+// MukkuLoader.prototype.dataType = 'json';
+MukkuLoader.prototype.dataFilter = function(data, dataType) {
+	// Day オブジェクトの値が空欄になって JSON パースエラーになるので、ダミーの値を入れる。
+	data = data.replace(/"Day":,/, '"Day":0,');
+	var json = JSON.parse(data);
+	return json;
+}
+MukkuLoader.prototype.onsuccess = function(data) {
+	// console.log("MukkuLoader: " + data.Status);
+	var mukku = {
+		ResultInfo: {
+			Status: data.Status,
+			PowerCutTime: data.LastUpDate[0],
+			GroupData: data.LastUpDate[1],
+		},
+		Result: {},
+	};
+	for (var i=0 ; i<data.TimeGroup.length ; i++) {
+		var tg = data.TimeGroup[i];
+		var group = tg.Group + '-' + tg.SubGroup;
+		mukku.Result[group] = {
+			All: tg.Time.All,
+			Count: tg.Time.Count,
+			Start: tg.Time.Start,
+			End: tg.Time.End,
+		};
+	}
+	this.data = mukku;
+};
 
 //---------------------------------------------------------
 // TwitLoader
@@ -500,11 +522,17 @@ TepcoWatcher.prototype.initListener = function() {
 
 TepcoWatcher.prototype.initLoader = function() {
 	var self = this;
+	
+	this.quickLoader = new QuickLoader;
+	this.quickLoader.__defineGetter__('interval',function(){ return self.config.quick_update_interval });
+	this.quickLoader.oncomplete = function() {
+		// 速報値をポップアップに通知
+		self.sendResponse('rspQuickData', self.quickLoader);
+		self.updateBadge();
+	}
 
 	this.latestLoader = new UsageLoader({type: 'latest'});
-	// this.latestLoader.interval = this.config.latest_update_interval;
 	this.latestLoader.__defineGetter__('interval',function(){ return self.config.latest_update_interval });
-
 	this.latestLoader.oncomplete = function() {
 		// [DEBUG] 計画停電実施中フラグや電力使用率の試験用
 		// self.latestLoader.data.saving = !self.latestLoader.data.saving;
@@ -551,15 +579,33 @@ TepcoWatcher.prototype.initLoader2 = function() {
 		this.tweetLoader.stopTimer();
 		this.tweetLoader = null;
 	}
+	
+	if (this.config.mukku_enabled) {
+		if (!this.mukkuLoader) {
+			this.mukkuLoader = new MukkuLoader;
+			this.mukkuLoader.__defineGetter__('interval',function(){ return self.config.mukku_update_interval });
+			this.mukkuLoader.oncomplete = function() {
+				// console.log(self.mukkuLoader.data);
+				self.sendResponse('rspMukkuData', self.mukkuLoader);
+			}
+		}
+	} else if (this.mukkuLoader) {
+		this.mukkuLoader.stopTimer();
+		this.mukkuLoader = null;
+	}
 }
 
 TepcoWatcher.prototype.startLoader = function() {
+	this.quickLoader.load();
 	this.latestLoader.load();
 	if (this.forecastLoader) {
 		this.forecastLoader.load();
 	}
 	if (this.tweetLoader) {
 		this.tweetLoader.load();
+	}
+	if (this.mukkuLoader) {
+		this.mukkuLoader.load();
 	}
 }
 
@@ -575,6 +621,13 @@ TepcoWatcher.prototype.onRequest = function (request, sender, callback) {
 	case 'reqConfigReload':
 		this.reload();
 		break;
+	case 'reqQuickData':
+		if (this.quickLoader.success) {
+			this.sendResponse('rspQuickData', this.quickLoader);
+		} else {
+			this.quickLoader.load();
+		}
+		break;
 	case 'reqLatestData':
 		if (this.latestLoader.success) {
 			this.sendResponse('rspLatestData', this.latestLoader);
@@ -587,6 +640,13 @@ TepcoWatcher.prototype.onRequest = function (request, sender, callback) {
 			this.sendResponse('rspTweetData', this.tweetLoader);
 		} else {
 			this.tweetLoader.load();
+		}
+		break;
+	case 'reqMukkuData':
+		if (this.mukkuLoader.success) {
+			this.sendResponse('rspMukkuData', this.mukkuLoader);
+		} else {
+			this.mukkuLoader.load();
 		}
 		break;
 	case 'reqUsageData':
@@ -610,9 +670,9 @@ TepcoWatcher.prototype.sendResponse = function(msg_action, loader) {
 
 TepcoWatcher.prototype.paddingForecast = function(loader) {
 	// 24時間分のデータが揃っている場合は何もしない
-	if (loader.success && loader.data.length == 24) {
-		return;
-	}
+// 	if (loader.success && loader.data.length == 24) {
+// 		return;
+// 	}
 	if (this.forecastLoader == null) {
 		return;
 	}
@@ -624,11 +684,16 @@ TepcoWatcher.prototype.paddingForecast = function(loader) {
 	}
 	var i = 0;
 	if (loader.data) {
-		i = loader.data.length;
+		// i = loader.data.length;
 	} else {
 		loader.data = [];
 	}
 	for ( ; i<24 ; i++) {
+		// 使用量実績が 0 より大きいときは、予報データで代替しないため continue する。
+		if (loader.data[i] && loader.data[i].usage > 0) {
+			continue;
+		}
+		// 予報データがない場合は、break する
 		if (!forecast[i]) {
 			break;
 		}
@@ -755,17 +820,29 @@ TepcoWatcher.prototype.notifyTweet = function (tweets) {
 TepcoWatcher.prototype.updateBadge = function() {
 	var badge_text;
 	var iconPath;
-	if (!this.latestLoader.success) {
-		badge_text = 'ERR';
-	} else if (this.latestLoader.data.usage_rate < 0) {
-		badge_text = '???';
+	var ql = this.quickLoader;
+	var ll = this.latestLoader;
+	
+	if (ql.success && ql.data.usage_rate >= 0) {
+		badge_text = ql.data.usage_rate.toFixed(1);
+	} else if (ll.success && ll.data.usage_rate >= 0) {
+		badge_text = ll.data.usage_rate.toFixed(1);
 	} else {
-		badge_text = this.latestLoader.data.usage_rate.toFixed(1);
+		badge_text = 'ERR';
 	}
+// 	
+// 	if (!this.latestLoader.success) {
+// 		badge_text = 'ERR';
+// 	} else if (this.latestLoader.data.usage_rate < 0) {
+// 		badge_text = '???';
+// 	} else {
+// 		badge_text = this.latestLoader.data.usage_rate.toFixed(1);
+// 	}
 	chrome.browserAction.setBadgeText({ "text": badge_text });
-
-	iconPath = this.latestLoader.data.saving ? "icon_off48.png" : "icon_on48.png";
-	chrome.browserAction.setIcon({ "path": iconPath });
+	if (ll.success) {
+		iconPath = ll.data.saving ? "icon_off48.png" : "icon_on48.png";
+		chrome.browserAction.setIcon({ "path": iconPath });
+	}
 }
 
 var tw=null;
@@ -773,6 +850,7 @@ $(document).ready(function(){
 	tw = new TepcoWatcher;
 	tw.startLoader();
 });
+
 })();
 </script>
 </head>

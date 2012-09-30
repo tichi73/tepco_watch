@@ -28,7 +28,7 @@ table {
 }
 
 #usage {
-	font-size: 25px;
+	font-size: 24px;
 	font-weight: bold;
 	white-space: nowrap;
 }
@@ -51,6 +51,23 @@ table {
 
 .updated {
 	color: gray;
+}
+
+.mukku_div {
+	padding: 3px;
+	white-space: nowrap;
+	-webkit-border-radius: 6px;
+}
+
+.mukku_on {
+	background-color: red;
+	color: white;
+	font-weight: bold;
+}
+
+.mukku_off {
+	background-color: lightgreen;
+	color: black;
 }
 
 .tepco_div {

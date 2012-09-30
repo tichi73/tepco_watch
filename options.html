@@ -90,7 +90,7 @@ var option_forecast = {
 			id: "forecast_update_interval",
 			legend: "電気予報を取得する間隔",
 			type: "number",
-			min: 3,
+			min: 1,
 			max: 24,
 			size: 3,
 			postfix: "時間",
@@ -117,7 +117,7 @@ var option_twitter = {
 			type: "text",
 			size: 30,
 			prefix: '@',
-			postfix: '<span id="check_twitter">確認</span>',
+			postfix: ' <span id="check_twitter">確認する</span>',
 			enabled_if: function(){ return $("#twitter_enabled").val()=="true" },
 		},{
 			id: "twitter_update_interval",
@@ -189,12 +189,99 @@ var option_graph = {
 	],
 };
 
+var option_mukku = {
+	title: "計画停電情報APIに関する設定",
+	title: "<a href=\"http://mukku.org/v2.00/\" target=\"_blank\">計画停電情報API</a> による情報取得に関する設定",
+	options: [
+		{
+			id: "mukku_enabled",
+			legend: "計画停電情報APIによる情報の取得",
+			type: "select",
+			select: [
+				{text:"取得する", value: true},
+				{text:"取得しない", value: false}
+			],
+			class: "select select_boolean",
+		},{
+			id: "mukku_update_interval",
+			legend: "計画停電情報を取得する間隔",
+			type: "number",
+			min: 1,
+			max: 24,
+			size: 3,
+			postfix: "時間",
+			class: "input_hours",
+			enabled_if: function(){ return $("#mukku_enabled").val()=="true" },
+		},{
+			id: "mukku_group",
+			legend: "計画停電のグループ番号（<a href='http://www.tepco.co.jp/KT/' target='_blank'>東京電力HPで調べる</a>）",
+			type: "select",
+			select: [
+				{text:"（未設定）", value: ""},
+				{
+					optgroup: "1グループ",
+					select: [
+						{text:"1-A", value: "1-A"},
+						{text:"1-B", value: "1-B"},
+						{text:"1-C", value: "1-C"},
+						{text:"1-D", value: "1-D"},
+						{text:"1-E", value: "1-E"},
+					]
+				},
+				{
+					optgroup: "2グループ",
+					select: [
+						{text:"2-A", value: "2-A"},
+						{text:"2-B", value: "2-B"},
+						{text:"2-C", value: "2-C"},
+						{text:"2-D", value: "2-D"},
+						{text:"2-E", value: "2-E"},
+					]
+				},
+				{
+					optgroup: "3グループ",
+					select: [
+						{text:"3-A", value: "3-A"},
+						{text:"3-B", value: "3-B"},
+						{text:"3-C", value: "3-C"},
+						{text:"3-D", value: "3-D"},
+						{text:"3-E", value: "3-E"},
+					]
+				},
+				{
+					optgroup: "4グループ",
+					select: [
+						{text:"4-A", value: "4-A"},
+						{text:"4-B", value: "4-B"},
+						{text:"4-C", value: "4-C"},
+						{text:"4-D", value: "4-D"},
+						{text:"4-E", value: "4-E"},
+					]
+				},
+				{
+					optgroup: "5グループ",
+					select: [
+						{text:"5-A", value: "5-A"},
+						{text:"5-B", value: "5-B"},
+						{text:"5-C", value: "5-C"},
+						{text:"5-D", value: "5-D"},
+						{text:"5-E", value: "5-E"},
+					]
+				},
+			],
+			class: "select",
+			enabled_if: function(){ return $("#mukku_enabled").val()=="true" },
+		},
+	],
+};
+
 var option_list = [
 	option_notify,
 	option_usage,
 	option_forecast,
 	option_twitter,
 	option_graph,
+	option_mukku,
 ];
 
 function create_option_table(opt) {
@@ -234,9 +321,21 @@ function create_option_table(opt) {
 			input = $(document.createElement('select'));
 			input.attr("id", o.id);
 			for (var j=0 ; j<o.select.length ; j++) {
-				var option = $(document.createElement('option'));
-				option.val(o.select[j].value).text(o.select[j].text);
-				input.append(option);
+				if (o.select[j].optgroup) {
+					var optgroup = $(document.createElement('optgroup'));
+					var select = o.select[j].select;
+					optgroup.attr('label', o.select[j].optgroup);
+					for (var k=0 ; k<select.length ; k++) {
+						var option = $(document.createElement('option'));
+						option.val(select[k].value).text(select[k].text);
+						optgroup.append(option);
+					}
+					input.append(optgroup);
+				} else {
+					var option = $(document.createElement('option'));
+					option.val(o.select[j].value).text(o.select[j].text);
+					input.append(option);
+				}
 			}
 			break;
 		}
