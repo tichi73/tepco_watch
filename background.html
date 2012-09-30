@@ -7,7 +7,7 @@
 (function(){
 var tepco_usage_latest_url = 'http://tepco-usage-api.appspot.com/latest.json';
 var tepco_usage_date_url = 'http://tepco-usage-api.appspot.com/YYYYMMDD.json';
-var twitter_url = 'http://api.twitter.com/1/tichi73/lists/tepco-watch/statuses.json';
+var twitter_url = 'https://api.twitter.com/1/tichi73/lists/tepco-watch/statuses.json';
 var yahoo_forecast_url = 'http://setsuden.yahooapis.jp/v1/Setsuden/electricPowerForecast';
 var yahoo_forecast_appid ='u4Wn54Wxg67cSC8juregwvUc.VzyFj8tKzQspcxcl1b0pUstbI.CyYq75G0-';
 var mukku_url = 'http://mukku.org/v1.01/TGL/';
@@ -382,9 +382,9 @@ TweetLoader.prototype.timeline_url = function(user) {
 	if (user.match(/(.+)\/(.+)/)) {
 		var user = RegExp.$1;
 		var list = RegExp.$2;
-		return 'http://api.twitter.com/1/' + user + '/lists/' + list + '/statuses.json';
+		return 'https://api.twitter.com/1/' + user + '/lists/' + list + '/statuses.json';
 	} else {
-		return 'http://api.twitter.com/1/statuses/user_timeline.json?screen_name=' + user;
+		return 'https://api.twitter.com/1/statuses/user_timeline.json?screen_name=' + user;
 	}
 }
 TweetLoader.prototype.onsuccess = function(data) {
