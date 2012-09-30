@@ -17,8 +17,8 @@ var mukku_url = 'http://mukku.org/v1.01/TGL/';
 //---------------------------------------------------------
 BackgroundStatus = function() {
 	var now = new Date().getTime();
-	this.define('latest_data_time'			,now - (     60*60*1000));
-	this.define('latest_tweet_time'			,now - (3*24*60*60*1000));
+	this.define('latest_data_time'	,now - (     60*60*1000));
+	this.define('latest_tweet_time'	,now - (3*24*60*60*1000));
 	this.__name = 'background';
 	this.__autosave = true;
 }

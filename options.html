@@ -221,6 +221,14 @@ function create_option_table(opt) {
 			if (o.maxlength) {
 				input.attr("maxlength", o.size);
 			}
+			if (o.type == "number") {
+				if ("min" in o) {
+					input.attr("min", o.min);
+				}
+				if ("max" in o) {
+					input.attr("max", o.max);
+				}
+			}
 			break;
 		case "select":
 			input = $(document.createElement('select'));
