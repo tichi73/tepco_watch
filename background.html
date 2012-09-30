@@ -22,6 +22,7 @@ BackgroundStatus = function() {
 	var now = new Date().getTime();
 	this.define('latest_data_time'	,now - (     60*60*1000));
 	this.define('latest_tweet_time'	,now - (3*24*60*60*1000));
+	this.define('current_usage_rate' ,600);
 	this.__name = 'background';
 	this.__autosave = true;
 }
@@ -528,7 +529,7 @@ TepcoWatcher.prototype.initLoader = function() {
 	this.quickLoader.oncomplete = function() {
 		// 速報値をポップアップに通知
 		self.sendResponse('rspQuickData', self.quickLoader);
-		self.updateBadge();
+		self.updateUsageRate();
 	}
 
 	this.latestLoader = new UsageLoader({type: 'latest'});
@@ -541,7 +542,8 @@ TepcoWatcher.prototype.initLoader = function() {
 		DesktopNotifier.prototype.setDefaultIcon(self.latestLoader.data.saving);
 
 		self.sendResponse('rspLatestData', self.latestLoader);
-		self.updateBadge();
+		self.updateUsageRate();
+		self.updateIcon();
 		if (self.latestLoader.success) {
 			self.notifyLatest(self.latestLoader.data);
 			self.clearUsageCache();
@@ -593,6 +595,8 @@ TepcoWatcher.prototype.initLoader2 = function() {
 		this.mukkuLoader.stopTimer();
 		this.mukkuLoader = null;
 	}
+
+	this.current_usage_rate = this.status.current_usage_rate;
 }
 
 TepcoWatcher.prototype.startLoader = function() {
@@ -669,38 +673,48 @@ TepcoWatcher.prototype.sendResponse = function(msg_action, loader) {
 }
 
 TepcoWatcher.prototype.paddingForecast = function(loader) {
-	// 24時間分のデータが揃っている場合は何もしない
-// 	if (loader.success && loader.data.length == 24) {
-// 		return;
-// 	}
-	if (this.forecastLoader == null) {
-		return;
+	var forecast = null;
+	if (this.forecastLoader) {
+		var date_str = UsageLoader.prototype.dateToString(loader.date, 'day');
+		forecast = this.forecastLoader.forecast[date_str];
 	}
-	// 予報データが無い場合は何もしない
-	var date_str = UsageLoader.prototype.dateToString(loader.date, 'day');
-	var forecast = this.forecastLoader.forecast[date_str];
-	if (!forecast) {
-		return;
-	}
-	var i = 0;
-	if (loader.data) {
-		// i = loader.data.length;
-	} else {
+	if (!loader.data) {
 		loader.data = [];
 	}
-	for ( ; i<24 ; i++) {
-		// 使用量実績が 0 より大きいときは、予報データで代替しないため continue する。
-		if (loader.data[i] && loader.data[i].usage > 0) {
-			continue;
+	for (var i = 0 ; i<24 ; i++) {
+		if (loader.data[i]) {
+			// 使用量実績が 0 より大きいときは、予報データで代替しないため continue する。
+			if (loader.data[i].usage > 0) {
+				// [DEBUG] 試験的に停電実施中を再現
+				//if (i==14 || i==15) {
+				//	loader.data[i].saving = true;
+				//}
+				loader.data[i].usage_type = loader.data[i].saving ? 0 : 1;
+				continue;
+			}
+			// 東電による予測値が提供されている場合は、それを予報データとする。
+			if (loader.data[i].forecast > 0) {
+				if (!loader.data[i].yahoo_forecast) {
+					loader.data[i].usage_type = 2;
+				}
+				continue;
+			}
 		}
 		// 予報データがない場合は、break する
-		if (!forecast[i]) {
+		if (!forecast || !forecast[i]) {
 			break;
 		}
+		var usage_type = 3;
+		// [DEBUG] 試験的にでんき予報データを差し込む
+		//if (i==20 || i==21) {
+		//	usage_type = 2;
+		//}
 		var padding = {
-			forecast: true,
+			yahoo_forecast: true,
+			usage_type: usage_type,
+			forecast: forecast[i].usage,
 			saving: false,
-			usage: forecast[i].usage,
+			usage: 0,
 			capacity: forecast[i].capacity,
 			year: loader.date.getFullYear(),
 			month: loader.date.getMonth() + 1,
@@ -737,6 +751,7 @@ TepcoWatcher.prototype.getUsageData = function(dates) {
 		// [DEBUG] データ読み出し遅延試験用
 		// setTimeout(function(){self.sendResponse('rspUsageData', usageLoader);}, 500);
 
+		// console.log(usageLoader);
 		self.sendResponse('rspUsageData', usageLoader);
 
 		for (var i=0 ; i<usageLoader.group.length ; i++) {
@@ -755,8 +770,8 @@ TepcoWatcher.prototype.clearUsageCache = function () {
 	for (var key in cache.cache_hash) {
 		if (key.match(/^usage_/)) {
 			var c = cache.cache_hash[key];
-			if (c.data && (c.data.length < 24 || c.data[c.data.length-1].forecast)) {
-				// 24時間分のデータがそろっていない場合、または予報を含む場合はキャッシュクリアする
+			if (c.data && (c.data.length < 24 || c.data[c.data.length-1].yahoo_forecast)) {
+				// 24時間分のデータがそろっていない場合、または Yahoo予報 を含む場合はキャッシュクリアする
 				keys.push(key);
 			}
 		}
@@ -817,30 +832,72 @@ TepcoWatcher.prototype.notifyTweet = function (tweets) {
 	console.log("notifyTweet: unread_tweets=" + unread_tweets + ", latest_tweet_time=" + this.status.latest_tweet_time);
 }
 
-TepcoWatcher.prototype.updateBadge = function() {
+TepcoWatcher.prototype.updateUsageRate = function() {
 	var badge_text;
-	var iconPath;
 	var ql = this.quickLoader;
 	var ll = this.latestLoader;
+	var next_usage_rate;
 	
 	if (ql.success && ql.data.usage_rate >= 0) {
-		badge_text = ql.data.usage_rate.toFixed(1);
+		// badge_text = ql.data.usage_rate.toFixed(1);
+		next_usage_rate = parseInt(ql.data.usage_rate * 10 + 0.5);
 	} else if (ll.success && ll.data.usage_rate >= 0) {
-		badge_text = ll.data.usage_rate.toFixed(1);
+		// badge_text = ll.data.usage_rate.toFixed(1);
+		next_usage_rate = parseInt(ll.data.usage_rate * 10 + 0.5);
 	} else {
 		badge_text = 'ERR';
+		chrome.browserAction.setBadgeText({ "text": 'ERR' });
 	}
-// 	
-// 	if (!this.latestLoader.success) {
-// 		badge_text = 'ERR';
-// 	} else if (this.latestLoader.data.usage_rate < 0) {
-// 		badge_text = '???';
-// 	} else {
-// 		badge_text = this.latestLoader.data.usage_rate.toFixed(1);
-// 	}
-	chrome.browserAction.setBadgeText({ "text": badge_text });
-	if (ll.success) {
-		iconPath = ll.data.saving ? "icon_off48.png" : "icon_on48.png";
+	// 使用率の表示を徐々に変える
+	this.next_usage_rate = next_usage_rate;
+	// console.log("updateUsageRate: " + this.current_usage_rate + " -> " + this.next_usage_rate);
+	this.updateUsageRateBadge();
+}
+
+TepcoWatcher.prototype.updateUsageRateBadge = function() {
+	var diff = 0;
+	var sign = 0;
+	if (this.next_usage_rate > this.current_usage_rate) {
+		sign = +1;	// current_usage_rate を徐々に増やす
+		diff = this.next_usage_rate - this.current_usage_rate;
+	} else if (this.next_usage_rate < this.current_usage_rate) {
+		sign = -1;	// current_usage_rate を徐々に減らす
+		diff = this.current_usage_rate - this.next_usage_rate;
+	}
+	if (sign) {
+		if (diff > 200) {
+			diff = 100;
+		} else if (diff > 100) {
+			diff = 50;
+		} else if (diff > 50) {
+			diff = 20;
+		} else if (diff > 25) {
+			diff = 10;
+		} else if (diff > 10) {
+			diff = 5;
+		} else if (diff > 5) {
+			diff = 2;
+		} else {
+			diff = 1;
+		}
+		this.current_usage_rate += sign * diff;
+	}
+	var rate_text = (this.current_usage_rate / 10.0).toFixed(1);
+	chrome.browserAction.setBadgeText({ "text": rate_text });
+
+	if (this.current_usage_rate == this.next_usage_rate) {
+		this.status.current_usage_rate = this.current_usage_rate;
+		return;
+	}
+
+	// 使用率を再表示
+	var self = this;
+	setTimeout(function(){ self.updateUsageRateBadge() }, 200);
+}
+
+TepcoWatcher.prototype.updateIcon = function() {
+	if (this.latestLoader.success) {
+		var iconPath = this.latestLoader.data.saving ? "icon_off48.png" : "icon_on48.png";
 		chrome.browserAction.setIcon({ "path": iconPath });
 	}
 }
@@ -852,6 +909,7 @@ $(document).ready(function(){
 });
 
 })();
+
 </script>
 </head>
 <body>

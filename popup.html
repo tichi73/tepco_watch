@@ -73,6 +73,7 @@ function jqplot_capacity(arg) {
 
 function jqplot_default(arg) {
 	var config = {
+		seriesColors: [ "#FF0000", "#4bb2c5", "#c5b47f", "#EAA228", "#579575", "#839557", "#958c12", "#953579", "#4b5de4", "#d8b83f", "#ff5800", "#0085cc"],
 		legend: {
 			show: true, location: 'sw',
 			// xoffset: 6, yoffset: 6,
@@ -228,14 +229,20 @@ function updateGraphView(data, callback) {
 			y_min = y;
 		}
 	}
-	function date_label(date, saving, forecast) {
+	function date_label(date, cnt0, cnt1, cnt2, cnt3) {
 		var label = date.toLocaleDateString();
 		var opt = '';
-		if (saving) {
+		if (cnt0 > 0) {
 			opt += '【停電】';
 		}
-		if (forecast) {
-			opt += '［予報］';
+		if (cnt1 > 0) {
+			opt += '［実績］';
+		}
+		if (cnt2 > 0) {
+			opt += '［でんき予報］';
+		}
+		if (cnt3 > 0) {
+			opt += '［Yahoo!予報］';
 		}
 		if (opt) {
 			label += ' ' + opt;
@@ -262,43 +269,35 @@ function updateGraphView(data, callback) {
 			var date = new Date(usage[0].year, usage[0].month-1, usage[0].day);
 			if (i == 0) {
 				// 当日データの場合（配列の先頭を当日としている）
-				var y_usage_normal = [];
-				var y_usage_saving = [];
-				var y_usage_forecast = [];
+				var y_usages = [[],[],[],[]];
+				var y_count = [0,0,0,0];
 				var y_capacity = [];
-				var normal = 0;
-				var saving = 0;
-				var forecast = 0;
 				for (var t=0 ; t<usage.length ; t++) {
-					var y_value = status.percent_mode ? (100 * usage[t].usage / usage[t].capacity) : usage[t].usage;
-					if (usage[t].saving) {
-						y_usage_normal.push(0);
-						y_usage_saving.push(y_value);
-						y_usage_forecast.push(0);
-						++saving;
-					} else if (usage[t].forecast) {
-						y_usage_normal.push(0);
-						y_usage_saving.push(0);
-						y_usage_forecast.push(y_value);
-						++forecast;
-					} else {
-						y_usage_normal.push(y_value);
-						y_usage_saving.push(0);
-						y_usage_forecast.push(0);
-						++normal;
-					}
+					var y_value0 = usage[t].usage || usage[t].forecast;
+					var y_value = status.percent_mode ? (100 * y_value0 / usage[t].capacity) : y_value0;
+					var type = usage[t].usage_type;
+					y_usages[0].push(type == 0 ? y_value : 0);
+					y_usages[1].push(type == 1 ? y_value : 0);
+					y_usages[2].push(type == 2 ? y_value : 0);
+					y_usages[3].push(type == 3 ? y_value : 0);
+					++y_count[type];
 					if (plot_capacity) {
 						y_capacity.push(usage[t].capacity);
 						check_max(usage[t].capacity);
 					}
-					check_max(usage[t].usage);
+					check_max(y_value0);
 				}
-				jqplot_config.series.push(jqplot_today(normal   ? {label: date_label(date)}              : {showLabel: false} ));
-				jqplot_config.series.push(jqplot_today(saving   ? {label: date_label(date, saving, 0)}   : {showLabel: false} ));
-				jqplot_config.series.push(jqplot_today(forecast ? {label: date_label(date, 0, forecast)} : {showLabel: false} ));
-				y_data.push(y_usage_normal);
-				y_data.push(y_usage_saving);
-				y_data.push(y_usage_forecast);
+
+				jqplot_config.series.push(jqplot_today(y_count[0] ? {label: date_label(date,1,0,0,0)}  : {showLabel: false} ));
+				jqplot_config.series.push(jqplot_today(y_count[1] ? {label: date_label(date,0,1,0,0)}  : {showLabel: false} ));
+				jqplot_config.series.push(jqplot_today(y_count[2] ? {label: date_label(date,0,0,1,0)}  : {showLabel: false} ));
+				jqplot_config.series.push(jqplot_today(y_count[3] ? {label: date_label(date,0,0,0,1)}  : {showLabel: false} ));
+
+				y_data.push(y_usages[0]);
+				y_data.push(y_usages[1]);
+				y_data.push(y_usages[2]);
+				y_data.push(y_usages[3]);
+
 				if (plot_capacity) {
 					jqplot_config.series.push(jqplot_capacity());
 					y_data.push(y_capacity);
@@ -306,16 +305,15 @@ function updateGraphView(data, callback) {
 				plot_date = date;
 			} else {
 				var y_usage = [];
-				var saving = 0;
-				var forecast = 0;
+				var y_count = [0,0,0,0];
 				for (var t=0 ; t<usage.length ; t++) {
-					var y_value = status.percent_mode ? (100 * usage[t].usage / usage[t].capacity) : usage[t].usage;
+					var y_value0 = usage[t].usage || usage[t].forecast;
+					var y_value = status.percent_mode ? (100 * y_value0 / usage[t].capacity) : y_value0;
 					y_usage.push(y_value);
 					check_max(y_value);
-					saving += !!usage[t].saving;
-					forecast += !!usage[t].forecast;
+					++y_count[usage[t].usage_type];
 				}
-				var series = jqplot_yesterday({label: date_label(date, saving, forecast)});
+				var series = jqplot_yesterday({label: date_label(date, y_count[0], y_count[1], y_count[2], y_count[3])});
 				jqplot_config.series.push(series);
 				y_data.push(y_usage);
 			}
