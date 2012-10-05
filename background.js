@@ -1,10 +1,3 @@
-<html>
-<head>
-<meta charset="utf-8">
-<script language="javascript" type="text/javascript" src="jqplot/jquery-1.4.4.min.js"></script>
-<script language="javascript" type="text/javascript" src="common.js"></script>
-<script type="text/javascript">
-
 (function(){
 
 var tepco_usage_quick_url = 'http://tepco-usage-api.appspot.com/quick.txt';
@@ -93,8 +86,8 @@ DesktopNotifier = function(title, body) {
 	this.body = body;
 }
 DesktopNotifier.prototype.timeout = 0;
-DesktopNotifier.prototype.icon_on = 'icon_on48.png';
-DesktopNotifier.prototype.icon_off = 'icon_off48.png';
+DesktopNotifier.prototype.icon_on = 'img/icon_on48.png';
+DesktopNotifier.prototype.icon_off = 'img/icon_off48.png';
 DesktopNotifier.prototype.icon = DesktopNotifier.prototype.icon_on;
 DesktopNotifier.prototype.setDefaultIcon = function(saving) {
 	DesktopNotifier.prototype.icon = saving ? DesktopNotifier.prototype.icon_off : DesktopNotifier.prototype.icon_on;
@@ -188,8 +181,8 @@ Loader.prototype = {
 			// console.log("oncached: name=" + self.name + " : url=" + self.url);
 			return;
 		}
-		
-		var ajax = $.ajax({
+
+		$.ajax({
 			url: this.url,
 			dataType: this.dataType,
 			dataFilter: function(data, dataType) {
@@ -494,6 +487,7 @@ GroupLoader.prototype.load = function() {
 // TepcoWatcher
 //---------------------------------------------------------
 function TepcoWatcher() {
+	this.extension_port = null;
 	this.initConfig();
 	this.initCache();
 	this.initListener();
@@ -516,9 +510,20 @@ TepcoWatcher.prototype.initCache = function() {
 
 TepcoWatcher.prototype.initListener = function() {
 	var self = this;
-	chrome.extension.onRequest.addListener(function(){
-		self.onRequest.apply(self, arguments);
+	chrome.extension.onConnect.addListener(function(port){
+		console.log("chrome.extension.onConnect:", arguments);
+		self.extension_port = port;
+		port.onMessage.addListener(function(){
+			self.onRequest.apply(self, arguments);
+		});
+		port.onDisconnect.addListener(function(){
+			console.log("port.onDisconnect:", arguments);
+			self.extension_port = null;
+		});
 	});
+	// chrome.extension.onRequest.addListener(function(){
+	// 	self.onRequest.apply(self, arguments);
+	// });
 }
 
 TepcoWatcher.prototype.initLoader = function() {
@@ -669,7 +674,12 @@ TepcoWatcher.prototype.sendResponse = function(msg_action, loader) {
 	} else {
 		msg.enabled = false;
 	}
-	chrome.extension.sendRequest(msg);
+	if (this.extension_port) {
+		this.extension_port.postMessage(msg);
+	}
+	// chrome.extension.sendRequest(msg,function(){
+	// 	console.log("lastError:", chrome.extension.lastError);
+	// });
 }
 
 TepcoWatcher.prototype.paddingForecast = function(loader) {
@@ -897,7 +907,7 @@ TepcoWatcher.prototype.updateUsageRateBadge = function() {
 
 TepcoWatcher.prototype.updateIcon = function() {
 	if (this.latestLoader.success) {
-		var iconPath = this.latestLoader.data.saving ? "icon_off48.png" : "icon_on48.png";
+		var iconPath = this.latestLoader.data.saving ? "img/icon_off48.png" : "img/icon_on48.png";
 		chrome.browserAction.setIcon({ "path": iconPath });
 	}
 }
@@ -909,9 +919,3 @@ $(document).ready(function(){
 });
 
 })();
-
-</script>
-</head>
-<body>
-</body>
-</html>
