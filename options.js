@@ -468,14 +468,7 @@ function setup_option() {
 		} else if (input.hasClass('input_hours')) {
 			value /= 60 * 60 * 1000;
 		}
-		if (input.hasClass('select')) {
-			$('option', input).each(function(){
-				var option = $(this);
-				option.attr("selected", option.val() == value.toString());
-			});
-		} else {
-			input.val(value);
-		}
+		input.val(value.toString());
 		input.removeClass('changed');
 	}
 	check_option();
