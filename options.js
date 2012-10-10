@@ -396,11 +396,7 @@ function check_option_enabled(opt) {
 		}
 		if (o.enabled_if) {
 			var enabled = o.enabled_if();
-			if (enabled) {
-				input.removeAttr("disabled");
-			} else {
-				input.attr("disabled", "disabled");
-			}
+			input.prop("disabled", !enabled);
 		}
 	}
 }
@@ -495,7 +491,9 @@ function save_option() {
 		config[id] = value;
 	}
 	config.save();
-	chrome.extension.sendRequest({action: "reqConfigReload"});
+	var options_port = chrome.extension.connect({name: 'options'});
+	options_port.postMessage({action: "reqConfigReload"});
+	options_port.disconnect();
 }
 
 var config = new TepcoWatcherConfig;

@@ -26,7 +26,7 @@ var preloading = true;
 var config = new TepcoWatcherConfig;
 var status = new PopupStatus;
 
-var extension_port;
+var popup_port;
 
 const DATE_1DAY_OFFSET	= 24 * 60 * 60 * 1000;
 
@@ -116,11 +116,10 @@ function clearBusy(type) {
 }
 
 function sendMessage(msg) {
-	// chrome.extension.sendRequest(msg);
-	if (extension_port) {
-		extension_port.postMessage(msg);
+	if (popup_port) {
+		popup_port.postMessage(msg);
 	} else {
-		console.error("extension_port not connected!");
+		console.error("popup_port not connected!");
 	}
 }
 
@@ -330,12 +329,14 @@ function updateGraphView(data, callback) {
 				}
 			} else {
 				// jqplot_config.axes.yaxis.max = y_max + (y_tickInterval / 2);
-				jqplot_config.axes.yaxis.max = y_max;
+				// jqplot_config.axes.yaxis.max = y_max;
+				var y_tick = y_tickInterval;
 				if (status.bottomcut_mode) {
-					var y_tick = parseInt(y_tickInterval / 2);
+					y_tick = Math.floor(y_tick / 2);
 					jqplot_config.axes.yaxis.tickInterval = y_tick;
-					jqplot_config.axes.yaxis.min = parseInt(y_min / y_tick) * y_tick;
+					jqplot_config.axes.yaxis.min = Math.floor(y_min / y_tick) * y_tick;
 				}
+				jqplot_config.axes.yaxis.max = Math.floor((y_max + y_tick - 1) / y_tick) * y_tick;
 			}
 			// グラフを生成する
 			new_graph.empty();
@@ -634,9 +635,8 @@ function init_graph_ctrl() {
 }
 
 function start() {
-	extension_port = chrome.extension.connect();
-	extension_port.onMessage.addListener(onMessage);
-	//chrome.extension.onRequest.addListener(onRequest);
+	popup_port = chrome.extension.connect({name: 'popup'});
+	popup_port.onMessage.addListener(onMessage);
 	updateQuickData();
 	updateLatestData();
 	updateTweetData();

@@ -7,6 +7,10 @@ var twitter_url = 'https://api.twitter.com/1/tichi73/lists/tepco-watch/statuses.
 var yahoo_forecast_url = 'http://setsuden.yahooapis.jp/v1/Setsuden/electricPowerForecast';
 var yahoo_forecast_appid ='u4Wn54Wxg67cSC8juregwvUc.VzyFj8tKzQspcxcl1b0pUstbI.CyYq75G0-';
 var mukku_url = 'http://mukku.org/v2.00/TGL/?output=json';
+var apps_icons = {
+	on: 'img/icon_on48.png',
+	off: 'img/icon_off48.png',
+};
 
 //---------------------------------------------------------
 // Status
@@ -81,22 +85,18 @@ Cache.prototype.setClearTimer = function(key, timeout) {
 //---------------------------------------------------------
 // DesktopNotifier / LatestNotifier
 //---------------------------------------------------------
-DesktopNotifier = function(title, body) {
+DesktopNotifier = function(title, body, saving) {
 	this.title = title;
 	this.body = body;
+	this.saving = saving;
 }
 DesktopNotifier.prototype.timeout = 0;
-DesktopNotifier.prototype.icon_on = 'img/icon_on48.png';
-DesktopNotifier.prototype.icon_off = 'img/icon_off48.png';
-DesktopNotifier.prototype.icon = DesktopNotifier.prototype.icon_on;
-DesktopNotifier.prototype.setDefaultIcon = function(saving) {
-	DesktopNotifier.prototype.icon = saving ? DesktopNotifier.prototype.icon_off : DesktopNotifier.prototype.icon_on;
-}
 DesktopNotifier.prototype.show = function() {
 	if (!webkitNotifications) {
 		return;
 	}
-	var notification = webkitNotifications.createNotification(this.icon, this.title, this.body);
+	var icon = this.saving ? apps_icons.off : apps_icons.on;
+	var notification = webkitNotifications.createNotification(icon, this.title, this.body);
 	notification.show();
 	if (this.timeout > 0) {
 		setTimeout(function(){ notification.cancel() }, this.timeout);
@@ -113,20 +113,20 @@ LatestNotifier = function(data) {
 	}
 	if (data.saving) {
 		body = title;
-		title= "■■■ 計画停電実施中です！ ■■■";
+		title = "■■■ 計画停電実施中です！ ■■■";
 	} else {
 		var usage_updated = new Date(data.usage_updated);
 		body = usage_updated.toLocaleDateString(true) + ' ' + usage_updated.toLocaleTimeString() + ' 更新';
 	}
-	DesktopNotifier.call(this, title, body);
+	DesktopNotifier.call(this, title, body, data.saving);
 }
 LatestNotifier.prototype = new DesktopNotifier();
 
-TweetNotifier = function(data) {
+TweetNotifier = function(data, saving) {
 	var title, body;
 	title = data.screen_name;
 	body = data.text;
-	DesktopNotifier.call(this, title, body);
+	DesktopNotifier.call(this, title, body, saving);
 }
 TweetNotifier.prototype = new DesktopNotifier();
 
@@ -487,7 +487,7 @@ GroupLoader.prototype.load = function() {
 // TepcoWatcher
 //---------------------------------------------------------
 function TepcoWatcher() {
-	this.extension_port = null;
+	this.extension_port = {};
 	this.initConfig();
 	this.initCache();
 	this.initListener();
@@ -511,19 +511,16 @@ TepcoWatcher.prototype.initCache = function() {
 TepcoWatcher.prototype.initListener = function() {
 	var self = this;
 	chrome.extension.onConnect.addListener(function(port){
-		console.log("chrome.extension.onConnect:", arguments);
-		self.extension_port = port;
+		//console.log("chrome.extension.onConnect:", port.name, arguments);
+		self.extension_port[port.name] = port;
 		port.onMessage.addListener(function(){
 			self.onRequest.apply(self, arguments);
 		});
 		port.onDisconnect.addListener(function(){
-			console.log("port.onDisconnect:", arguments);
-			self.extension_port = null;
+			//console.log("port.onDisconnect:", port.name, arguments);
+			delete self.extension_port[port.name];
 		});
 	});
-	// chrome.extension.onRequest.addListener(function(){
-	// 	self.onRequest.apply(self, arguments);
-	// });
 }
 
 TepcoWatcher.prototype.initLoader = function() {
@@ -543,8 +540,7 @@ TepcoWatcher.prototype.initLoader = function() {
 		// [DEBUG] 計画停電実施中フラグや電力使用率の試験用
 		// self.latestLoader.data.saving = !self.latestLoader.data.saving;
 		// self.latestLoader.data.usage_rate = 120;
-
-		DesktopNotifier.prototype.setDefaultIcon(self.latestLoader.data.saving);
+		// DesktopNotifier.prototype.setDefaultIcon(self.latestLoader.data.saving);
 
 		self.sendResponse('rspLatestData', self.latestLoader);
 		self.updateUsageRate();
@@ -674,12 +670,9 @@ TepcoWatcher.prototype.sendResponse = function(msg_action, loader) {
 	} else {
 		msg.enabled = false;
 	}
-	if (this.extension_port) {
-		this.extension_port.postMessage(msg);
+	if (this.extension_port['popup']) {
+		this.extension_port['popup'].postMessage(msg);
 	}
-	// chrome.extension.sendRequest(msg,function(){
-	// 	console.log("lastError:", chrome.extension.lastError);
-	// });
 }
 
 TepcoWatcher.prototype.paddingForecast = function(loader) {
@@ -830,8 +823,9 @@ TepcoWatcher.prototype.notifyTweet = function (tweets) {
 	}
 	if (this.config.notify_anytime || (this.config.twitter_notify && unread_tweets > 0)) {
 		if (this.config.notify_enabled) {
-			var notifier = new TweetNotifier(tweets[0]);
-			if (unread_tweets > 0) {
+			var saving = this.latestLoader.success ? this.latestLoader.data.saving : false;
+			var notifier = new TweetNotifier(tweets[0], saving);
+			if (unread_tweets > 1) {
 				notifier.title += " (" + unread_tweets + " new tweets)";
 			}
 			notifier.timeout = this.config.notify_timeout;
@@ -907,8 +901,8 @@ TepcoWatcher.prototype.updateUsageRateBadge = function() {
 
 TepcoWatcher.prototype.updateIcon = function() {
 	if (this.latestLoader.success) {
-		var iconPath = this.latestLoader.data.saving ? "img/icon_off48.png" : "img/icon_on48.png";
-		chrome.browserAction.setIcon({ "path": iconPath });
+		var icon = this.latestLoader.data.saving ? apps_icons.off : apps_icons.on;
+		chrome.browserAction.setIcon({ "path": icon });
 	}
 }
 
