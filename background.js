@@ -540,7 +540,6 @@ TepcoWatcher.prototype.initLoader = function() {
 		// [DEBUG] 計画停電実施中フラグや電力使用率の試験用
 		// self.latestLoader.data.saving = !self.latestLoader.data.saving;
 		// self.latestLoader.data.usage_rate = 120;
-		// DesktopNotifier.prototype.setDefaultIcon(self.latestLoader.data.saving);
 
 		self.sendResponse('rspLatestData', self.latestLoader);
 		self.updateUsageRate();
@@ -689,9 +688,7 @@ TepcoWatcher.prototype.paddingForecast = function(loader) {
 			// 使用量実績が 0 より大きいときは、予報データで代替しないため continue する。
 			if (loader.data[i].usage > 0) {
 				// [DEBUG] 試験的に停電実施中を再現
-				//if (i==14 || i==15) {
-				//	loader.data[i].saving = true;
-				//}
+				// if (i==14 || i==15) { loader.data[i].saving = true; }
 				loader.data[i].usage_type = loader.data[i].saving ? 0 : 1;
 				continue;
 			}
@@ -709,9 +706,7 @@ TepcoWatcher.prototype.paddingForecast = function(loader) {
 		}
 		var usage_type = 3;
 		// [DEBUG] 試験的にでんき予報データを差し込む
-		//if (i==20 || i==21) {
-		//	usage_type = 2;
-		//}
+		// if (i==20 || i==21) { usage_type = 2; }
 		var padding = {
 			yahoo_forecast: true,
 			usage_type: usage_type,
