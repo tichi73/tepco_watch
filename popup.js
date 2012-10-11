@@ -156,16 +156,12 @@ function updateQuickView(data, callback) {
 function updateLatestView(data, callback) {
 	// アイコンの設定
 	if (data.saving) {
-		$('#icon').attr("src", "img/icon_off48.png");
-		$('#saving').attr('class', 'saving_on').text("計画停電：実施中です！");
+		$('#icon').prop("src", "img/icon_off48.png");
+		$('#saving').prop('class', 'saving_on').text("計画停電：実施中です！");
 	} else {
-		$('#icon').attr("src", "img/icon_on48.png");
-		$('#saving').attr('class', 'saving_off').text("計画停電：実施していません");
+		$('#icon').prop("src", "img/icon_on48.png");
+		$('#saving').prop('class', 'saving_off').text("計画停電：実施していません");
 	}
-
-	// 使用率表示 ⇒ 速報値で表示するように変更
-// 	var latest_usage = '現在 ' + data.usage + ' 万kW【' + data.usage_rate.toFixed(1) + '%】使用中';
-// 	$('#usage').text(latest_usage);
 
 	// 予想最大電力／ピーク時供給力
 	var capacity_info = '予想需要 ' + data.forecast_peak_usage + ' 万kW(' + data.forecast_peak_period + '時台)';
@@ -173,7 +169,7 @@ function updateLatestView(data, callback) {
 	capacity_info += '最大供給力 ' + data.capacity + ' 万kW(' + data.capacity_peak_period + '時台)';
 	$('#capacity_info').text(capacity_info);
 
-// 	// データ読み込み日時の更新
+	// データ読み込み日時の更新
 	var usage_updated = new Date(data.usage_updated);
 	$("#updated").text(usage_updated.toLocaleDateString() + ' ' + usage_updated.toLocaleTimeString());
 
@@ -489,8 +485,8 @@ function updateTweetView(data, callback) {
 			$('.tweet_icon', tbody).attr('src', tweet.image_url);
 			$('.tweet_link', tbody).attr('href', tweet.tweet_link);
 			$('.tweet_name', tbody).attr('href', tweet.user_link).text(tweet.screen_name);
-			$(".tweet_date", tbody).text("");
-			$(".tweet_time", tbody).text(date.getTime());
+			$('.tweet_date', tbody).text("");
+			$('.tweet_time', tbody).text(date.getTime());
 			$('.tweet_text', tbody).text(tweet.text);
 			table.append(tbody);
 		}
@@ -593,6 +589,7 @@ function resize() {
 	
 	$('html').width($('body').outerWidth(true));
 	$('html').height($('body').outerHeight(true));
+	$(':focus').trigger('blur');
 }
 
 function init_graph_ctrl() {
@@ -600,10 +597,10 @@ function init_graph_ctrl() {
 		return;
 	}
 	
-	$('#chk_yesterday').attr('checked', !!status.compare_yesterday).click(graphOption);
-	$('#chk_lastweek').attr('checked', !!status.compare_lastweek).click(graphOption);
-	$('#chk_percent').attr('checked', !!status.percent_mode).click(graphOption);
-	$('#chk_bottomcut').attr('checked', !!status.bottomcut_mode).click(graphOption);
+	$('#chk_yesterday').prop('checked', !!status.compare_yesterday).click(graphOption);
+	$('#chk_lastweek').prop('checked', !!status.compare_lastweek).click(graphOption);
+	$('#chk_percent').prop('checked', !!status.percent_mode).click(graphOption);
+	$('#chk_bottomcut').prop('checked', !!status.bottomcut_mode).click(graphOption);
 	
 	$('#move_prev').click(function(){moveDate(-1)});
 	$('#move_next').click(function(){moveDate(+1)});
@@ -618,8 +615,8 @@ function init_graph_ctrl() {
 	option.offset(offset);
 
 	$('#navi_open').hover(
-		function(){ $(this).attr('class', 'navi_open_on'); },
-		function(){ $(this).attr('class', 'navi_open_off'); }
+		function(){ $(this).prop('class', 'navi_open_on'); },
+		function(){ $(this).prop('class', 'navi_open_off'); }
 	);
 	$('#navi_open').click(function(){ $('#navi_option').show(); });
 	$('#navi_close').click(function(){ $('#navi_option').hide(); });
