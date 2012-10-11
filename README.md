@@ -22,5 +22,5 @@
 
 グラフ表示には [jqPlot](http://www.jqplot.com/) 1.0.4 を利用しています。
 
-Windows 7, MAC OS X で動作確認しています。
+Windows 7, Mac OS X で動作確認しています。
 不具合報告などは [@tichi73](http://twitter.com/tichi73) までお願いします。
